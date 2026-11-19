@@ -3131,6 +3131,8 @@ torch = [
 train = [
     { name = "huggingface-hub" },
     { name = "librosa" },
+    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "onnxruntime", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "safetensors" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -3160,6 +3162,7 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'onnx'", specifier = ">=1.17,<2" },
     { name = "onnxruntime", marker = "extra == 'ruaccent'", specifier = ">=1.17,<2" },
     { name = "onnxruntime", marker = "extra == 'torch'", specifier = ">=1.17,<2" },
+    { name = "onnxruntime", marker = "extra == 'train'", specifier = ">=1.17,<2" },
     { name = "ruaccent", marker = "extra == 'ruaccent'", specifier = "==1.5.8.3" },
     { name = "safetensors", marker = "extra == 'torch'", specifier = ">=0.4,<1" },
     { name = "safetensors", marker = "extra == 'train'", specifier = ">=0.4,<1" },

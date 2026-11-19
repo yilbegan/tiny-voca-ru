@@ -91,7 +91,9 @@ phonemize_json("Разминка.")
 }
 
 async function loadModel() {
-  config = await (await fetch("assets/config.json")).json();
+  const metaResponse = await fetch(`assets/config.json?v=${VERSION}`);
+  if (!metaResponse.ok) throw new Error(`config.json: ${metaResponse.status}`);
+  config = await metaResponse.json();
   const bytes = await download("assets/model.onnx", "Загрузка модели");
   status("Запуск модели");
   session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });

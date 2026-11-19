@@ -83,7 +83,7 @@
     <textarea id="text" spellcheck="false" aria-label="Текст для чтения">Здравствуйте! Это tiny-voca-ru, маленькая модель синтеза речи, которая работает прямо в вашем браузере.</textarea>
     <div class="examples" id="examples"></div>
     <div class="controls">
-      <div class="voices" role="radiogroup" aria-label="Голос">
+      <div class="voices" id="voices" role="radiogroup" aria-label="Голос">
         <label><input type="radio" name="voice" value="0"><span>Женский</span></label>
         <label><input type="radio" name="voice" value="1" checked><span>Мужской</span></label>
       </div>
@@ -173,7 +173,28 @@ function wav(samples, rate) {
 let phonemes = [];
 worker.onmessage = ({ data }) => {
   if (data.type === "status") setStatus(data.text, data.progress);
-  else if (data.type === "ready") { ready = true; rate = data.sampleRate; setStatus("Можно читать."); update(); }
+  else if (data.type === "ready") {
+    ready = true;
+    rate = data.sampleRate;
+    if (Array.isArray(data.voices) && data.voices.length > 0) {
+      const labels = { F: "Женский", M: "Мужской" };
+      const defaultIndex = data.voices.length > 1 ? 1 : 0;
+      $("voices").replaceChildren(...data.voices.map((name, idx) => {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = "voice";
+        input.value = String(idx);
+        if (idx === defaultIndex) input.checked = true;
+        const span = document.createElement("span");
+        span.textContent = labels[name] || name;
+        label.append(input, span);
+        return label;
+      }));
+    }
+    setStatus("Можно читать.");
+    update();
+  }
   else if (data.type === "sentence" && data.id === request) {
     phonemes.push(data.phonemes);
     if (live && data.audio) live.add(data.audio, data.sampleRate);

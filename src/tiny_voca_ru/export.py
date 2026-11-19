@@ -250,14 +250,17 @@ class Exportable(nn.Module):
 
 def example_inputs(length: int = 24) -> tuple[Tensor, ...]:
     tokens = torch.randint(5, len(SYMBOLS), (1, length))
-    scalar = lambda value: torch.tensor([value], dtype=torch.float32)  # noqa: E731
+
+    def _scalar(value: float) -> Tensor:
+        return torch.tensor([value], dtype=torch.float32)
+
     return (
         tokens,
         torch.zeros_like(tokens),
         torch.tensor([0]),
-        scalar(1.0),
-        scalar(0.0),
-        scalar(1.0),
+        _scalar(1.0),
+        _scalar(0.0),
+        _scalar(1.0),
     )
 
 

@@ -7,6 +7,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -131,7 +132,7 @@ def read_metadata(path: str | Path) -> list[dict[str, str]]:
     """Read utterance records from ``metadata.csv`` or ``metadata.jsonl``."""
     source = Path(path)
     if source.suffix == ".csv":
-        with source.open(encoding="utf-8", newline="") as handle:
+        with source.open(encoding="utf-8-sig", newline="") as handle:
             return [
                 {k.strip(): (v or "").strip() for k, v in row.items() if k}
                 for row in csv.DictReader(handle)
@@ -233,6 +234,10 @@ def prepare_dataset(
             audio_path = Path(audio_rel) if Path(audio_rel).is_absolute() else root / audio_rel
             wave = load_audio(audio_path, config.sample_rate)
             feats = extract_features(wave, config)
+            if stressed and not re.search(r"[+ёЁ]", text):
+                raise ValueError(
+                    "no stress mark in stressed text; remove --stressed or supply marked text"
+                )
             phones = phonemize(text, stressed=True) if stressed else phonemize(text, stress=stress)
             if len(phones) > config.max_tokens:
                 raise ValueError(
@@ -279,6 +284,10 @@ def prepare_dataset(
                 }
             )
 
+    (out / "rejected.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rejected) + ("\n" if rejected else ""),
+        encoding="utf-8",
+    )
     if not accepted:
         raise ValueError(
             f"no utterances passed preparation ({len(rejected)} rejected); check rejected.jsonl"
@@ -292,10 +301,6 @@ def prepare_dataset(
     )
     (out / "validation.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in val_rows) + ("\n" if val_rows else ""),
-        encoding="utf-8",
-    )
-    (out / "rejected.jsonl").write_text(
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in rejected) + ("\n" if rejected else ""),
         encoding="utf-8",
     )
     manifest: dict[str, Any] = {

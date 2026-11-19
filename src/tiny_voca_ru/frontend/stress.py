@@ -232,7 +232,12 @@ class LiteStress(StressProvider):
             if "+" in match.group():
                 continue
             for part in _parts(match.group()):
-                if part and self._known(part) is None:
+                if (
+                    part
+                    and len(part) <= _ACCENT_MAX
+                    and any(c in VOWELS for c in part)
+                    and self._known(part) is None
+                ):
                     unknown[part] = None
         return list(unknown)
 

@@ -222,6 +222,18 @@ def load_pretrained_for_finetune(
 ) -> dict[str, Any]:
     """Load pretrained safetensors weights into ``model``, adapting speaker embeddings if needed."""
     pretrained, meta = load_checkpoint(checkpoint_path, device="cpu")
+    flexible_fields = {"speakers", "dropout", "max_tokens", "max_frames"}
+    src_cfg = pretrained.config.to_dict()
+    dst_cfg = model.config.to_dict()
+    mismatched = [
+        key
+        for key in dst_cfg
+        if key not in flexible_fields and src_cfg.get(key) != dst_cfg.get(key)
+    ]
+    if mismatched:
+        details = ", ".join(f"{k}: {src_cfg.get(k)!r} != {dst_cfg.get(k)!r}" for k in mismatched)
+        raise ValueError(f"incompatible model config for fine-tuning ({details})")
+
     src_state = pretrained.state_dict()
     dst_state = model.state_dict()
     src_speakers = pretrained.config.speakers
@@ -236,9 +248,7 @@ def load_pretrained_for_finetune(
         if name not in src_state:
             raise ValueError(f"missing weight {name!r} in pretrained checkpoint")
         src_tensor = src_state[name]
-        if name in ("voices.weight", "frame_voices.weight") and (
-            src_speakers != dst_speakers or init_voice is not None
-        ):
+        if name in ("voices.weight", "frame_voices.weight") and src_speakers != dst_speakers:
             merged = dst_tensor.clone()
             fallback = (
                 src_tensor[src_speakers.index(init_voice)]
@@ -246,7 +256,7 @@ def load_pretrained_for_finetune(
                 else src_tensor.mean(dim=0)
             )
             for dst_idx, speaker in enumerate(dst_speakers):
-                if init_voice is None and speaker in src_speakers:
+                if speaker in src_speakers:
                     merged[dst_idx] = src_tensor[src_speakers.index(speaker)]
                 else:
                     merged[dst_idx] = fallback
@@ -407,9 +417,20 @@ def _atomic_save(payload: dict[str, Any], path: Path) -> None:
     os.replace(tmp, path)
 
 
+def _load_optional_dataset(path: str | Path | None, config: Config) -> SpeechDataset | None:
+    if path is None:
+        return None
+    target = Path(path)
+    if not target.is_file():
+        return None
+    if not any(line.strip() for line in target.read_text(encoding="utf-8").splitlines()):
+        return None
+    return SpeechDataset(target, config)
+
+
 def train(
     train_manifest: str | Path,
-    val_manifest: str | Path,
+    val_manifest: str | Path | None,
     output_dir: str | Path,
     config: Config,
     train_cfg: TrainConfig,
@@ -426,11 +447,14 @@ def train(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     dev = torch.device(device)
+    if dev.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     torch.manual_seed(train_cfg.seed)
 
     train_ds = SpeechDataset(train_manifest, config)
-    val_ds = SpeechDataset(val_manifest, config)
-    val_indices = balanced_indices(val_ds, train_cfg.validation_size)
+    val_ds = _load_optional_dataset(val_manifest, config)
+    val_indices = balanced_indices(val_ds, train_cfg.validation_size) if val_ds is not None else []
 
     system = TrainingSystem(config).to(dev)
     critics = Discriminators().to(dev)
@@ -447,8 +471,9 @@ def train(
     optimizer = torch.optim.AdamW(
         trainable_params, lr=train_cfg.learning_rate, betas=(0.8, 0.99), weight_decay=0.01
     )
+    # Discriminator conv layers use weight_norm, so critic weight decay stays 0.0.
     critic_optimizer = torch.optim.AdamW(
-        critics.parameters(), lr=train_cfg.learning_rate, betas=(0.8, 0.99), weight_decay=0.01
+        critics.parameters(), lr=train_cfg.learning_rate, betas=(0.8, 0.99), weight_decay=0.0
     )
     sampler = BucketSampler(
         train_ds.lengths, train_cfg.batch_frames, train_cfg.max_batch, train_cfg.seed
@@ -458,13 +483,27 @@ def train(
     best_val = math.inf
     if resume is not None:
         snap = torch.load(Path(resume), map_location="cpu", weights_only=True)
+        if snap.get("config") != config.to_dict():
+            raise ValueError("resume checkpoint was trained with a different model configuration")
+        if bool(snap.get("freeze_encoder", False)) != train_cfg.freeze_encoder:
+            raise ValueError(
+                "resume checkpoint freeze_encoder setting does not match current --freeze-encoder"
+            )
+        start_step = int(snap["step"])
+        if start_step >= train_cfg.steps:
+            raise ValueError(
+                f"checkpoint at step {start_step} already reached --steps {train_cfg.steps}"
+            )
         system.load_state_dict(snap["system"])
         critics.load_state_dict(snap["critics"])
         optimizer.load_state_dict(snap["optimizer"])
         critic_optimizer.load_state_dict(snap["critic_optimizer"])
         sampler.load_state(snap["sampler"])
-        start_step = int(snap["step"])
         best_val = float(snap.get("best_val", math.inf))
+        if "rng" in snap:
+            torch.set_rng_state(snap["rng"])
+        if dev.type == "cuda" and "cuda_rng" in snap:
+            torch.cuda.set_rng_state(snap["cuda_rng"], dev)
 
     started = time.time()
     for step in range(start_step, train_cfg.steps):
@@ -487,35 +526,36 @@ def train(
                 flush=True,
             )
         if completed % train_cfg.save_every == 0 or completed == train_cfg.steps:
-            val_metrics = validate(system, val_ds, val_indices, dev, train_cfg.weights)
+            val_metrics = (
+                validate(system, val_ds, val_indices, dev, train_cfg.weights)
+                if val_ds is not None and val_indices
+                else {}
+            )
             score = val_metrics.get("validation_predicted_mel", math.inf)
             save_checkpoint(out / "inference", system.model, step=completed)
             if score < best_val:
                 best_val = score
                 save_checkpoint(out / "best", system.model, step=completed)
-            _atomic_save(
-                {
-                    "step": completed,
-                    "best_val": best_val,
-                    "config": config.to_dict(),
-                    "system": system.state_dict(),
-                    "critics": critics.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "critic_optimizer": critic_optimizer.state_dict(),
-                    "sampler": sampler.state(),
-                },
-                out / "last.pt",
-            )
-            print(
-                json.dumps(
-                    {
-                        "step": completed,
-                        "best_val": round(best_val, 4),
-                        **{k: round(v, 4) for k, v in val_metrics.items()},
-                    }
-                ),
-                flush=True,
-            )
+            payload: dict[str, Any] = {
+                "step": completed,
+                "best_val": best_val,
+                "freeze_encoder": train_cfg.freeze_encoder,
+                "config": config.to_dict(),
+                "system": system.state_dict(),
+                "critics": critics.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "critic_optimizer": critic_optimizer.state_dict(),
+                "sampler": sampler.state(),
+                "rng": torch.get_rng_state(),
+            }
+            if dev.type == "cuda":
+                payload["cuda_rng"] = torch.cuda.get_rng_state(dev)
+            _atomic_save(payload, out / "last.pt")
+            log_entry: dict[str, Any] = {"step": completed}
+            if math.isfinite(best_val):
+                log_entry["best_val"] = round(best_val, 4)
+            log_entry.update({k: round(v, 4) for k, v in val_metrics.items()})
+            print(json.dumps(log_entry), flush=True)
     return out / "inference"
 
 
@@ -566,22 +606,26 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     args = parser.parse_args()
 
-    if args.data_dir is None and (args.train is None or args.validation is None):
-        parser.error("provide --data-dir or both --train and --validation")
+    if args.data_dir is None and args.train is None:
+        parser.error("provide --data-dir or --train")
 
-    if args.train is not None and args.validation is not None:
-        train_manifest, val_manifest = args.train, args.validation
-    else:
-        assert args.data_dir is not None
+    if args.data_dir is not None:
         train_manifest = args.train or (args.data_dir / "train.jsonl")
-        val_manifest = args.validation or (args.data_dir / "validation.jsonl")
+        val_manifest: Path | None = args.validation or (args.data_dir / "validation.jsonl")
+    else:
+        assert args.train is not None
+        train_manifest = args.train
+        val_manifest = args.validation
+
+    sibling_manifest = train_manifest.parent / "manifest.json"
     if args.config is not None:
         config = Config.load(args.config)
     elif args.data_dir is not None and (args.data_dir / "manifest.json").is_file():
         config = Config.load(args.data_dir / "manifest.json")
+    elif sibling_manifest.is_file():
+        config = Config.load(sibling_manifest)
     else:
         config = Config()
-
     train_cfg = TrainConfig(
         steps=args.steps,
         batch_frames=args.batch_frames,

@@ -240,3 +240,144 @@ class TrainingAndFinetuneTests(unittest.TestCase):
 
             # Verify phonemize sanity on metadata text.
             self.assertEqual(phonemize("Привет мир.").unknown, ())
+
+    def test_prepare_writes_rejected_before_raising_and_guards_stressed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wav_dir = root / "wavs"
+            wav_dir.mkdir()
+            sf.write(wav_dir / "a.wav", _voiced_sine(0.7), 24000, subtype="FLOAT")
+            # UTF-8 BOM CSV with unstressed text passed under stressed=True.
+            meta_csv = root / "metadata.csv"
+            meta_csv.write_text(
+                "audio,text,speaker\na.wav,Привет мир,alice\n", encoding="utf-8-sig"
+            )
+            out_dir = root / "prepared"
+            fake_rec: Any = FakeRecognizer({})
+            with self.assertRaisesRegex(ValueError, "rejected.jsonl"):
+                prepare_dataset(
+                    meta_csv,
+                    out_dir,
+                    audio_root=wav_dir,
+                    stressed=True,
+                    recognizer=fake_rec,
+                    base_config=small_config(speakers=("alice",)),
+                )
+            rejected_file = out_dir / "rejected.jsonl"
+            self.assertTrue(rejected_file.is_file())
+            self.assertIn("no stress mark", rejected_file.read_text(encoding="utf-8"))
+
+    def test_finetune_preserves_existing_speakers_and_validates_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            torch.manual_seed(3)
+            src_model = TinyVoca(small_config(speakers=("F", "M"))).eval()
+            src_dir = save_checkpoint(root / "src", src_model, step=10)
+
+            # Expanding ("F", "M") -> ("F", "M", "alice") with --init-voice F must keep M intact.
+            dst_model = TinyVoca(small_config(speakers=("F", "M", "alice")))
+            load_pretrained_for_finetune(dst_model, src_dir, init_voice="F")
+            self.assertTrue(torch.equal(dst_model.voices.weight[0], src_model.voices.weight[0]))
+            self.assertTrue(torch.equal(dst_model.voices.weight[1], src_model.voices.weight[1]))
+            self.assertTrue(torch.equal(dst_model.voices.weight[2], src_model.voices.weight[0]))
+            self.assertTrue(
+                torch.equal(dst_model.frame_voices.weight[1], src_model.frame_voices.weight[1])
+            )
+            self.assertTrue(
+                torch.equal(dst_model.frame_voices.weight[2], src_model.frame_voices.weight[0])
+            )
+
+            # Incompatible acoustic/model config must be rejected cleanly.
+            bad_cfg = Config.from_dict(
+                {**small_config(speakers=("alice",)).to_dict(), "n_mels": 64}
+            )
+            with self.assertRaisesRegex(ValueError, "incompatible model config"):
+                load_pretrained_for_finetune(TinyVoca(bad_cfg), src_dir)
+
+    def test_train_optional_validation_gan_step_and_resume_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wav_dir = root / "wavs"
+            wav_dir.mkdir()
+            sf.write(wav_dir / "u0.wav", _voiced_sine(0.7, freq_hz=170.0), 24000, subtype="FLOAT")
+            sf.write(wav_dir / "u1.wav", _voiced_sine(0.8, freq_hz=190.0), 24000, subtype="FLOAT")
+            meta_csv = root / "metadata.csv"
+            with meta_csv.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["audio", "text", "speaker"])
+                writer.writerow(["u0.wav", "Привет мир.", "alice"])
+                writer.writerow(["u1.wav", "Как дела?", "alice"])
+
+            base_cfg = small_config(speakers=("alice",))
+            fake_rec: Any = FakeRecognizer({})
+            manifest = prepare_dataset(
+                meta_csv,
+                root / "prepared",
+                audio_root=wav_dir,
+                val_ratio=0.0,
+                recognizer=fake_rec,
+                base_config=base_cfg,
+                limits=QualityLimits(
+                    min_phones_per_second=1.0, max_phones_per_second=50.0, min_vowel_voiced=0.0
+                ),
+            )
+            self.assertEqual(manifest["counts"]["validation"], 0)
+
+            run_dir = root / "run"
+            cfg_step1 = TrainConfig(
+                steps=1,
+                batch_frames=500,
+                max_batch=2,
+                learning_rate=5e-4,
+                warmup=1,
+                gan_start=0,
+                teacher_hold=1,
+                teacher_ramp=1,
+                save_every=1,
+                log_every=1,
+                seed=5,
+                freeze_encoder=True,
+            )
+            train(
+                root / "prepared/train.jsonl",
+                root / "prepared/validation.jsonl",
+                run_dir,
+                base_cfg,
+                cfg_step1,
+                device="cpu",
+            )
+            self.assertTrue((run_dir / "last.pt").is_file())
+            self.assertTrue((run_dir / "inference/model.safetensors").is_file())
+            self.assertFalse((run_dir / "best").exists())
+
+            # Resume rejects mismatched freeze_encoder or non-advancing steps.
+            with self.assertRaisesRegex(ValueError, "freeze_encoder"):
+                train(
+                    root / "prepared/train.jsonl",
+                    None,
+                    run_dir,
+                    base_cfg,
+                    TrainConfig(**{**cfg_step1.__dict__, "steps": 2, "freeze_encoder": False}),
+                    resume=run_dir / "last.pt",
+                )
+            with self.assertRaisesRegex(ValueError, "already reached"):
+                train(
+                    root / "prepared/train.jsonl",
+                    None,
+                    run_dir,
+                    base_cfg,
+                    cfg_step1,
+                    resume=run_dir / "last.pt",
+                )
+
+            # Valid resume advances to step 2 cleanly.
+            inf_dir = train(
+                root / "prepared/train.jsonl",
+                None,
+                run_dir,
+                base_cfg,
+                TrainConfig(**{**cfg_step1.__dict__, "steps": 2}),
+                resume=run_dir / "last.pt",
+            )
+            _, meta = load_checkpoint(inf_dir)
+            self.assertEqual(meta.step, 2)

@@ -50,6 +50,17 @@ def limit_peak(wave: NDArray[np.float32], peak: float = PEAK) -> NDArray[np.floa
     )
 
 
+def _validate_synthesis_params(speed: float, pitch_shift: float, pitch_range: float) -> None:
+    if not math.isfinite(speed) or not 0.25 <= speed <= 4.0:
+        raise ValueError("speed must be between 0.25 and 4.0")
+    if (
+        not math.isfinite(pitch_shift)
+        or not math.isfinite(pitch_range)
+        or not 0.0 <= pitch_range <= 3.0
+    ):
+        raise ValueError("pitch_shift must be finite and pitch_range between 0.0 and 3.0")
+
+
 class _BaseSynthesizer:
     sample_rate: int
     voices: tuple[str, ...]
@@ -57,6 +68,8 @@ class _BaseSynthesizer:
     max_frames: int
 
     def _voice_index(self, voice: str | int) -> int:
+        if isinstance(voice, bool):
+            raise ValueError(f"voice must be a speaker name or integer index, got {voice!r}")
         if isinstance(voice, int):
             if not 0 <= voice < len(self.voices):
                 raise ValueError(f"voice index {voice} out of range for {self.voices}")
@@ -91,10 +104,11 @@ class _BaseSynthesizer:
         peak: float | None = PEAK,
     ) -> SynthesisResult:
         """Synthesize Russian text of any length into a float32 waveform."""
-        if not math.isfinite(speed) or not 0.25 <= speed <= 4.0:
-            raise ValueError("speed must be between 0.25 and 4.0")
-        if not math.isfinite(pitch_shift) or not 0.0 <= pitch_range <= 3.0:
-            raise ValueError("pitch_shift must be finite and pitch_range between 0.0 and 3.0")
+        _validate_synthesis_params(speed, pitch_shift, pitch_range)
+        if not math.isfinite(pause_seconds) or pause_seconds < 0.0:
+            raise ValueError("pause_seconds must be finite and non-negative")
+        if peak is not None and (not math.isfinite(peak) or peak <= 0.0):
+            raise ValueError("peak must be finite and positive")
         selected_voice: str | int = self.voices[0] if voice is None else voice
         limit = self.max_tokens - 12
         waves: list[NDArray[np.float32]] = []
@@ -118,7 +132,7 @@ class _BaseSynthesizer:
                         speed=speed,
                         pitch_shift=pitch_shift,
                         pitch_range=pitch_range,
-                        seed=seed + len(waves),
+                        seed=seed + len(spoken),
                     )
                 except ValueError as err:
                     if "max_frames" not in str(err):
@@ -211,6 +225,7 @@ class OnnxSynthesizer(_BaseSynthesizer):
         pitch_range: float = 1.0,
         seed: int = 0,
     ) -> NDArray[np.float32]:
+        _validate_synthesis_params(speed, pitch_shift, pitch_range)
         if len(phones) > self.max_tokens:
             raise ValueError("utterance exceeds max_tokens")
         feed: dict[str, Any] = {
@@ -224,7 +239,15 @@ class OnnxSynthesizer(_BaseSynthesizer):
         if "noise" in self._input_names:
             rng = np.random.default_rng(seed)
             feed["noise"] = rng.standard_normal((1, self.hop * self.max_frames)).astype(np.float32)
-        outputs = self.session.run(None, feed)
+        try:
+            outputs = self.session.run(None, feed)
+        except Exception as err:
+            msg = str(err).lower()
+            if "noise" in self._input_names and ("broadcast" in msg or "invalid dimensions" in msg):
+                raise ValueError(f"utterance exceeds max_frames ({self.max_frames})") from err
+            raise
+        if len(outputs) > 1 and int(np.asarray(outputs[1]).sum()) > self.max_frames:
+            raise ValueError(f"utterance exceeds max_frames ({self.max_frames})")
         audio = np.asarray(outputs[0], dtype=np.float32)[0]
         if not np.isfinite(audio).all():
             raise RuntimeError("ONNX model produced non-finite audio")
@@ -305,6 +328,8 @@ class Synthesizer(_BaseSynthesizer):
 
     def __init__(self, path: str | Path, *, device: str = "cpu") -> None:
         target = Path(path)
+        if not target.exists():
+            raise FileNotFoundError(f"model path does not exist: {target}")
         self._backend: _BaseSynthesizer
         if _is_onnx_path(target):
             self._backend = OnnxSynthesizer(target)

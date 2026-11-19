@@ -197,6 +197,17 @@ class LiteStressTests(unittest.TestCase):
         logits = [[0, 0, 0], [5, 0, 0], [0, 1, 0], [5, 0, 0], [0, 3, 0], [0, 0, 0]]
         self.assertEqual(stress_from_logits("мама", logits), "мам+а")
 
+    def test_unknown_words_skips_overlong_and_vowelless(self) -> None:
+        from unittest.mock import patch
+
+        from tiny_voca_ru.frontend import stress as stress_mod
+
+        provider = stress_mod.LiteStress()
+        overlong = "а" * 60
+        with patch.object(stress_mod, "_accent_session", lambda: None):
+            found = provider.unknown_words(f"Флюмбрастый бвгджз {overlong}")
+        self.assertEqual(found, ["флюмбрастый"])
+
 
 class RuaccentStressTests(unittest.TestCase):
     def fake(self, output: str) -> RuaccentStress:

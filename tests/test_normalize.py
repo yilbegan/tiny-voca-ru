@@ -104,6 +104,57 @@ class NumbersAgainstNum2Words(unittest.TestCase):
                     reference_ordinal(n, case, gender, animate, plural),
                 )
 
+    def test_every_form_of_small_numbers(self) -> None:
+        for n in (
+            *range(0, 125),
+            200,
+            300,
+            400,
+            999,
+            1000,
+            1001,
+            2000,
+            2002,
+            5000,
+            21000,
+            100000,
+            10**6,
+        ):
+            for case in CASES:
+                for gender in "mfn":
+                    for animate in (False, True):
+                        for plural in (False, True):
+                            with self.subTest(
+                                n=n, case=case, gender=gender, animate=animate, plural=plural
+                            ):
+                                self.assertEqual(
+                                    cardinal(n, case, gender, animate, plural),
+                                    reference_cardinal(n, case, gender, animate, plural),
+                                )
+                                self.assertEqual(
+                                    ordinal(n, case, gender, plural, animate),
+                                    reference_ordinal(n, case, gender, animate, plural),
+                                )
+
+    def test_num2words_differences(self) -> None:
+        self.assertEqual(_n2w(2000, case="acc", animate=True), "двух тысячи")
+        self.assertEqual(cardinal(2000, "acc", animate=True), "две тысячи")
+        self.assertEqual(_n2w(12000005, to="ordinal"), "двенадцатый миллионов пятый")
+        self.assertEqual(ordinal(12000005), "двенадцать миллионов пятый")
+        self.assertEqual(_n2w(300005, to="ordinal", case="gen"), "трёхсотого тысяч пятого")
+        self.assertEqual(ordinal(300005, "gen"), "триста тысяч пятого")
+        self.assertEqual(_n2w(1525, plural=True), "одни тысяча пятьсот двадцать пять")
+        self.assertEqual(cardinal(1525, plural=True), "тысяча пятьсот двадцать пять")
+        self.assertEqual(_n2w(2000000, gender="f"), "две миллиона")
+        self.assertEqual(cardinal(2000000, gender="f"), "два миллиона")
+        self.assertEqual(_n2w(2, case="acc", plural=True, animate=False), "двоих")
+        self.assertEqual(cardinal(2, "acc", plural=True), "двое")
+        self.assertEqual(_n2w(22, case="acc", animate=True), "двадцать двух")
+        self.assertEqual(cardinal(22, "acc", animate=True), "двадцать два")
+        self.assertEqual(cardinal(2, "acc", animate=True), "двух")
+        self.assertEqual(_n2w(1000), "одна тысяча")
+        self.assertEqual(cardinal(1000), "тысяча")
+
     def test_random_decimals(self) -> None:
         rng = random.Random(17)
         for _ in range(300):

@@ -20,7 +20,7 @@ from tiny_voca_ru.checkpoint import (
 )
 from tiny_voca_ru.config import Config
 from tiny_voca_ru.export import export_onnx
-from tiny_voca_ru.frontend import SYMBOLS, NothingToPronounce
+from tiny_voca_ru.frontend import SYMBOLS, NothingToPronounce, phonemize
 from tiny_voca_ru.infer import OnnxSynthesizer, Synthesizer, TorchSynthesizer
 from tiny_voca_ru.model import TinyVoca
 
@@ -131,3 +131,54 @@ class CheckpointAndInferTests(unittest.TestCase):
                 torch_synth.synthesize("!!! 🙂")
             with self.assertRaises(ValueError):
                 torch_synth.synthesize("Привет", voice="UNKNOWN")
+            with self.assertRaises(ValueError):
+                torch_synth.synthesize("Привет", voice=True)
+            with self.assertRaises(ValueError):
+                torch_synth.synthesize("Привет", pause_seconds=-0.1)
+            with self.assertRaises(ValueError):
+                torch_synth.synthesize("Привет", peak=0.0)
+
+            # pause_seconds > 0 must not alter per-utterance RNG seeds.
+            no_pause = torch_synth.synthesize("Привет! Пока!", voice="F", seed=42, peak=None)
+            with_pause = torch_synth.synthesize(
+                "Привет! Пока!", voice="F", seed=42, pause_seconds=0.05, peak=None
+            )
+            gap_samples = int(round(0.05 * torch_synth.sample_rate))
+            self.assertEqual(with_pause.audio.size, no_pause.audio.size + gap_samples)
+            self.assertTrue(np.array_equal(with_pause.audio[-2400:], no_pause.audio[-2400:]))
+
+            # Direct OnnxSynthesizer.speak_utterance validates speed/pitch_range/bool voice.
+            phones = phonemize("Привет.")
+            with self.assertRaises(ValueError):
+                onnx_synth.speak_utterance(phones, speed=0.0)
+            with self.assertRaises(ValueError):
+                onnx_synth.speak_utterance(phones, speed=-1.0)
+            with self.assertRaises(ValueError):
+                onnx_synth.speak_utterance(phones, pitch_range=-0.5)
+            with self.assertRaises(ValueError):
+                onnx_synth.speak_utterance(phones, voice=False)
+
+            # Nonexistent model path raises FileNotFoundError before backend dispatch.
+            with self.assertRaises(FileNotFoundError):
+                Synthesizer(root / "does-not-exist")
+            with self.assertRaises(FileNotFoundError):
+                load_checkpoint(root / "does-not-exist")
+
+    def test_onnx_splits_on_max_frames_with_and_without_external_noise(self) -> None:
+        model = small_model()
+        long_sentence = (
+            "Первый длинный фрагмент речи, второй длинный фрагмент речи, "
+            "третий длинный фрагмент речи, четвёртый длинный фрагмент речи."
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ckpt_dir = save_checkpoint(root / "ckpt", model, step=1)
+            torch_res = Synthesizer(ckpt_dir).synthesize(long_sentence, voice="F")
+            self.assertGreater(len(torch_res.utterances), 1)
+
+            for ext_noise in (False, True):
+                onnx_dir = root / f"onnx_{ext_noise}"
+                export_onnx(ckpt_dir, onnx_dir, external_noise=ext_noise)
+                onnx_res = Synthesizer(onnx_dir).synthesize(long_sentence, voice="F")
+                self.assertEqual(len(onnx_res.utterances), len(torch_res.utterances))
+                self.assertGreater(onnx_res.audio.size, 0)

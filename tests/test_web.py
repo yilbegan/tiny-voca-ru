@@ -278,6 +278,29 @@ class WorkerTests(unittest.TestCase):
     def test_default_voices_match_config(self) -> None:
         self.assertEqual(Config().speakers, ("F", "M"))
 
+    def test_sentence_splitting_matches_python_frontend(self) -> None:
+        samples = [
+            "Привет! Как дела?",
+            "Встреча на ул. Ленина в 15:30. Приходи вовремя!",
+            "Билет стоит 5 тыс. руб. Это недорого.",
+            "А. С. Пушкин родился в 1799 г. Он писал стихи.",
+            "«Ура!» — крикнул он. И всё затихло…",
+            "Текст без точки",
+        ]
+        script = r"""
+const fs = require("fs");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const m = src.match(/const ABBREVIATIONS[\s\S]*?function finished\(text\) \{[\s\S]*?\n\}/);
+const { sentences, finished } = new Function(m[0] + "\nreturn { sentences, finished };")();
+const inputs = JSON.parse(process.argv[2]);
+process.stdout.write(JSON.stringify(inputs.map((t) => sentences(finished(t)))));
+"""
+        js_out = node(script, str(PUBLIC / "worker.js"), json.dumps(samples, ensure_ascii=False))
+        py_out = [
+            frontend.split_sentences(frontend.ensure_terminal_punctuation(t)) for t in samples
+        ]
+        self.assertEqual(js_out, py_out)
+
 
 class BrowserGlueTests(unittest.TestCase):
     def test_nothing_to_pronounce_returns_null(self) -> None:

@@ -236,7 +236,7 @@ def quality(
     spans: Sequence[tuple[int, int]],
     log_probs: NDArray[np.floating[Any]],
     labels: Sequence[int],
-    voiced: NDArray[np.floating[Any]],
+    voiced: NDArray[np.bool_] | NDArray[np.floating[Any]],
     level_db: NDArray[np.float64],
     hop: int,
     sample_rate: int,
@@ -357,7 +357,7 @@ def align_utterance(
     log_probs = recognizer.log_probs(wave, config.sample_rate)
     spans = token_spans(log_probs, labels, blank=recognizer.blank)
     level_db = frame_energy_db(wave, config.hop, settings.energy_window)
-    silent, _ = silence_mask(level_db, settings)
+    silent, threshold_db = silence_mask(level_db, settings)
     durations = assemble(symbols, spans, frames, silent, config.hop, config.sample_rate, settings)
     qc = quality(
         symbols,
@@ -365,9 +365,10 @@ def align_utterance(
         spans,
         log_probs,
         labels,
-        voiced,
+        np.asarray(voiced) > 0.5,
         level_db,
         config.hop,
         config.sample_rate,
     )
+    qc["silence_threshold_db"] = round(float(threshold_db), 2)
     return durations.tolist(), qc

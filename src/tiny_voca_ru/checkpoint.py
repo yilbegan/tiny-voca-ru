@@ -32,6 +32,8 @@ class CheckpointMeta:
 
 def _resolve_checkpoint_paths(path: str | Path) -> tuple[Path, Path]:
     target = Path(path)
+    if not target.exists():
+        raise FileNotFoundError(f"checkpoint path does not exist: {target}")
     if target.is_dir():
         return target / WEIGHTS_FILENAME, target / CONFIG_FILENAME
     if target.suffix == ".safetensors":
