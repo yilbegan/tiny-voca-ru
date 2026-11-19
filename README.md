@@ -2,7 +2,7 @@
 
 English | [Русский](https://github.com/yilbegan/tiny-voca-ru/blob/main/README.ru.md)
 
-A Russian adaptation of the 4.5M-parameter [`tiny-voca`](https://github.com/n4ze3m/tiny-voca) text-to-speech model with female and male voices (`F` and `M`), fast CPU inference, and client-side browser support.
+A Russian adaptation of the 4.5M-parameter [`tiny-voca`](https://github.com/n4ze3m/tiny-voca) text-to-speech model with female and male voices, fast CPU inference, and client-side browser support.
 
 - **Model:** [`egnch/tiny-voca-ru`](https://huggingface.co/egnch/tiny-voca-ru)
 - **Dataset:** [`egnch/tiny-voca-ru-dataset`](https://huggingface.co/datasets/egnch/tiny-voca-ru-dataset)
