@@ -2,7 +2,7 @@
 
 [English](README.md) | Русский
 
-Русская адаптация компактной модели синтеза речи [`tiny-voca`](https://github.com/n4ze3m/tiny-voca) на 4,5 млн параметров: женский и мужской голоса (`F` и `M`), быстрый инференс на CPU и работа прямо в браузере.
+Русская адаптация компактной модели синтеза речи [`tiny-voca`](https://github.com/n4ze3m/tiny-voca) на 4,5 млн параметров: женский и мужской голоса, быстрый инференс на CPU и работа прямо в браузере.
 
 - **Модель:** [`egnch/tiny-voca-ru`](https://huggingface.co/egnch/tiny-voca-ru)
 - **Датасет:** [`egnch/tiny-voca-ru-dataset`](https://huggingface.co/datasets/egnch/tiny-voca-ru-dataset)
