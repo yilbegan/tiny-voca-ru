@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tiny-voca-ru</title>
+<meta name="description" content="tiny-voca-ru: русский синтез речи на 4,5 млн параметров. Работает прямо в браузере.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171512'/%3E%3Cpath d='M8 13v6M12 9v14M16 12v8M20 7v18M24 13v6' stroke='%23f4efe6' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --paper: #f6f2ea; --ink: #1b1915; --muted: #6d665b; --line: #d9d2c4; --panel: #fffdf8;
+    --accent: #b4421f; --accent-ink: #fff; --ok: #2f6b3c;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #151412; --ink: #ece6da; --muted: #9a9284; --line: #35312a; --panel: #1d1b18; --accent: #e0703f; --accent-ink: #151412; --ok: #7fbf8c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.55 var(--ui); }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 20px 72px; }
+  header h1 { font: 600 44px/1.05 var(--sans); letter-spacing: -0.01em; margin: 0 0 14px; }
+  header p { margin: 0; color: var(--muted); max-width: 56ch; }
+  header p strong { color: var(--ink); font-weight: 600; }
+  .panel { margin-top: 36px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  textarea { width: 100%; min-height: 150px; resize: vertical; border: 0; outline: 0; background: transparent; color: inherit;
+             font: 20px/1.5 var(--sans); padding: 4px; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+  .examples button { font: 13px var(--ui); color: var(--muted); background: transparent; border: 1px solid var(--line);
+                     border-radius: 999px; padding: 5px 11px; cursor: pointer; }
+  .examples button:hover { color: var(--ink); border-color: var(--muted); }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+  .voices { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .voices label { padding: 7px 14px; font-size: 14px; cursor: pointer; color: var(--muted); }
+  .voices input { position: absolute; opacity: 0; pointer-events: none; }
+  .voices input:checked + span { color: var(--ink); font-weight: 600; }
+  .voices label:has(input:checked) { background: var(--paper); }
+  .voices label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .speed { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+  .speed input { width: 130px; accent-color: var(--accent); }
+  .speed output { font: 13px var(--mono); color: var(--ink); min-width: 4ch; }
+  #speak { margin-left: auto; min-width: 6em; font: 600 16px var(--ui); color: var(--accent-ink); background: var(--accent); border: 0;
+           border-radius: 10px; padding: 11px 22px; cursor: pointer; }
+  #speak:disabled { opacity: 0.45; cursor: default; }
+  #speak:focus-visible, textarea:focus-visible, .examples button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .status { margin-top: 16px; font-size: 14px; color: var(--muted); min-height: 22px; }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+  .bar[hidden] { display: none; }
+  .result[hidden] { display: none; }
+  .result { margin-top: 22px; }
+  audio { width: 100%; }
+  dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0 0; }
+  dl div { border-top: 1px solid var(--line); padding-top: 8px; }
+  dt { font-size: 12px; color: var(--muted); }
+  dd { margin: 2px 0 0; font: 15px var(--mono); }
+  details { margin-top: 16px; font-size: 14px; color: var(--muted); }
+  details pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.6 var(--mono); color: var(--ink); margin: 8px 0 0; }
+  .facts { margin-top: 44px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border-top: 1px solid var(--line); }
+  .facts div { padding: 16px 12px 16px 0; border-bottom: 1px solid var(--line); }
+  .facts b { display: block; font: 600 22px var(--sans); }
+  .facts span { font-size: 13px; color: var(--muted); }
+  footer { margin-top: 36px; font-size: 14px; color: var(--muted); }
+  footer a { color: var(--ink); text-underline-offset: 3px; margin-right: 16px; }
+  footer p { margin: 14px 0 0; max-width: 62ch; }
+  @media (max-width: 560px) {
+    header h1 { font-size: 34px; } main { padding-top: 36px; }
+    dl { grid-template-columns: repeat(2, 1fr); } .facts { grid-template-columns: repeat(2, 1fr); }
+    #speak { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>tiny-voca-ru</h1>
+    <p>Русская модель синтеза речи с двумя голосами, <strong>4,5 млн параметров</strong>, обучена с нуля.
+       Работает прямо в браузере: введённый текст не покидает ваше устройство.</p>
+  </header>
+
+  <section class="panel">
+    <textarea id="text" spellcheck="false" aria-label="Текст для чтения">Здравствуйте! Это tiny-voca-ru, маленькая модель синтеза речи, которая работает прямо в вашем браузере.</textarea>
+    <div class="examples" id="examples"></div>
+    <div class="controls">
+      <div class="voices" role="radiogroup" aria-label="Голос">
+        <label><input type="radio" name="voice" value="0"><span>Женский</span></label>
+        <label><input type="radio" name="voice" value="1" checked><span>Мужской</span></label>
+      </div>
+      <label class="speed">Темп <input id="speed" type="range" min="0.7" max="1.4" step="0.05" value="1"><output id="speed-value">1.00</output></label>
+      <button id="speak" disabled>Прочитать</button>
+    </div>
+  </section>
+
+  <div class="status" id="status" role="status">Загрузка…</div>
+  <div class="bar" id="bar"><i></i></div>
+
+  <section class="result" id="result" hidden>
+    <audio id="audio" controls></audio>
+    <dl>
+      <div><dt>Запись</dt><dd id="m-audio">–</dd></div>
+      <div><dt>Время синтеза</dt><dd id="m-time">–</dd></div>
+      <div><dt>Скорость</dt><dd id="m-speed">–</dd></div>
+      <div><dt>Текст в фонемы</dt><dd id="m-phonemes">–</dd></div>
+    </dl>
+    <details><summary>Фонемы</summary><pre id="phonemes"></pre></details>
+  </section>
+
+  <section class="facts">
+    <div><b>4 534 411</b><span>параметров вместе с генератором волны</span></div>
+    <div><b>21 МБ</b><span>файл модели (ONNX, float32)</span></div>
+    <div><b>24 кГц</b><span>моно</span></div>
+    <div><b>2 голоса</b><span>женский и мужской, синтетические</span></div>
+    <div><b>22,2 ч</b><span>в train-сплите, 23,8 ч во всём датасете</span></div>
+    <div><b>104 000</b><span>шагов обучения</span></div>
+    <div><b>Apache-2.0</b><span>код; словарь ударений — MIT (ruaccent)</span></div>
+  </section>
+
+  <footer>
+    <a href="https://github.com/n4ze3m/tiny-voca">Основа: tiny-voca</a>
+    <a href="https://github.com/Den4ikAI/ruaccent">Ударения: ruaccent</a>
+    <p>При первом посещении загружается около 32 МБ: модель, словарь ударений и среда Python для фонетизатора.
+       Только русский язык. Иностранные имена, редкие слова и омографы иногда читаются неверно.</p>
+  </footer>
+</main>
+
+<script src="player.js"></script>
+<script>
+const EXAMPLES = [
+  ["Приветствие", "Здравствуйте! Это tiny-voca-ru, маленькая модель синтеза речи, которая работает прямо в вашем браузере."],
+  ["Числа", "Встречу перенесли на 15:30, 14 марта, так что у нас осталось около 45 минут. Билет стоит 1250 рублей."],
+  ["Вопрос", "Ты правда думал, что я забуду про твой день рождения? Конечно, нет!"],
+  ["Рассказ", "Она никогда раньше не видела моря и долго стояла у самой воды, не говоря ни слова."],
+  ["Омографы", "Старый замок на воротах замка давно заржавел. Мы видели, как белки грызли орехи, богатые белками."],
+];
+const $ = (id) => document.getElementById(id);
+const worker = new Worker("worker.js");
+let ready = false, busy = false, request = 0, url = null, rate = 0, live = null;
+
+for (const [label, text] of EXAMPLES) {
+  const button = document.createElement("button");
+  button.textContent = label;
+  button.onclick = () => { $("text").value = text; $("text").focus(); };
+  $("examples").append(button);
+}
+$("speed").oninput = () => { $("speed-value").textContent = Number($("speed").value).toFixed(2); };
+
+function setStatus(text, progress) {
+  $("status").textContent = text;
+  $("bar").hidden = progress == null;
+  if (progress != null) $("bar").firstElementChild.style.width = Math.round(progress * 100) + "%";
+}
+// While the sentences are playing, the button stops them.
+function update() {
+  const playing = live !== null && live.playing;
+  $("speak").textContent = playing ? "Стоп" : "Прочитать";
+  $("speak").disabled = !playing && (!ready || busy || !$("text").value.trim());
+}
+$("text").oninput = update;
+
+function wav(samples, rate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const text = (offset, value) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+  text(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  text(36, "data"); view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 32767, true);
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+let phonemes = [];
+worker.onmessage = ({ data }) => {
+  if (data.type === "status") setStatus(data.text, data.progress);
+  else if (data.type === "ready") { ready = true; rate = data.sampleRate; setStatus("Можно читать."); update(); }
+  else if (data.type === "sentence" && data.id === request) {
+    phonemes.push(data.phonemes);
+    if (live && data.audio) live.add(data.audio, data.sampleRate);
+    setStatus(`Предложение ${data.index + 1} из ${data.total}`, (data.index + 1) / data.total);
+  } else if (data.type === "done" && data.id === request) {
+    busy = false; update();
+    const seconds = data.audio.length / data.sampleRate;
+    if (url) URL.revokeObjectURL(url);
+    url = URL.createObjectURL(wav(data.audio, data.sampleRate));
+    $("audio").src = url;
+    // The sentences have been playing since the first one was made, so the whole clip only waits in the player.
+    // Where they could not be heard, it plays now.
+    if (!live || !live.end()) $("audio").play().catch(() => {});
+    $("m-audio").textContent = seconds.toFixed(1) + " s";
+    $("m-time").textContent = (data.totalTime / 1000).toFixed(2) + " s";
+    $("m-speed").textContent = (seconds / (data.totalTime / 1000)).toFixed(1) + "× быстрее реального времени";
+    $("m-phonemes").textContent = Math.round(data.phonemeTime) + " ms";
+    $("phonemes").textContent = phonemes.join("\n");
+    $("result").hidden = false;
+    setStatus("Готово.");
+  } else if (data.type === "error") {
+    busy = false;
+    if (live) live.end();
+    update();
+    setStatus(data.plain ? data.message : "Что-то пошло не так: " + data.message);
+  }
+};
+worker.onerror = (event) => setStatus("Не удалось запустить: " + event.message);
+
+// Sound has to start inside a click, so the player is made here and not when the first sentence arrives.
+function listen() {
+  const Context = window.AudioContext || window.webkitAudioContext;
+  if (!live && Context) {
+    let context = null;
+    try { context = new Context({ sampleRate: rate }); } catch (error) { try { context = new Context(); } catch (failed) {} }
+    if (context) live = livePlayer(context, update);
+  }
+  $("audio").pause();
+  if (live) live.begin();
+}
+$("audio").onplay = () => { if (live) live.stop(); };
+
+$("speak").onclick = () => {
+  if (live && live.playing) { live.stop(); return; }
+  busy = true; phonemes = [];
+  request += 1;
+  listen();
+  update();
+  setStatus("Читаю…", 0);
+  worker.postMessage({ type: "speak", id: request, text: $("text").value,
+                       voice: Number(document.querySelector("input[name=voice]:checked").value), speed: Number($("speed").value) });
+};
+$("text").addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !$("speak").disabled) $("speak").click();
+});
+
+setStatus("Загрузка модели и фонетизатора…");
+worker.postMessage({ type: "load" });
+</script>
+</body>
+</html>

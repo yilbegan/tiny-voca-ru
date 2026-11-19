@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+checkpoints/
+dist/
+build/
+*.egg-info/
+web/public/assets/
+web/public/model.*
+web/public/phonemizer.zip
+web/public/accent.onnx

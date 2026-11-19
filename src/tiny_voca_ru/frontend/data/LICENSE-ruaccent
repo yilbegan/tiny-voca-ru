@@ -1,0 +1,15 @@
+stress.txt.gz is a subset of the stress dictionary of RUAccent and accent.onnx
+is its nn_accent/model.onnx, both from https://huggingface.co/ruaccent/accentuator
+(revision b78ae5ea1e62beaf138bed1865cd8c3b0b5ca855), https://github.com/Den4ikAI/ruaccent.
+They are distributed under the MIT License below, not under this project's licence.
+stress.txt.gz is rebuilt by scripts/build_stress_lexicon.py.
+
+MIT License
+
+Copyright 2026 Denis Petrov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

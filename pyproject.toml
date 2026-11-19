@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiny-voca-ru"
+version = "0.1.0"
+description = "A lightweight 4.5M-parameter Russian text-to-speech model"
+readme = "README.md"
+authors = [{ name = "Muhammed Nazeem" }, { name = "tiny-voca-ru contributors" }]
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24,<3"]
+
+[project.optional-dependencies]
+onnx = ["onnxruntime>=1.17,<2", "soundfile>=0.12,<1"]
+torch = [
+    "torch>=2.4,<3",
+    "safetensors>=0.4,<1",
+    "soundfile>=0.12,<1",
+    "onnxruntime>=1.17,<2",
+    "onnx>=1.15,<2",
+]
+ruaccent = [
+    "ruaccent==1.5.8.3",
+    "onnxruntime>=1.17,<2",
+    "huggingface-hub>=0.34,<3",
+]
+train = [
+    "torch>=2.4,<3",
+    "safetensors>=0.4,<1",
+    "soundfile>=0.12,<1",
+    "librosa>=0.10.2,<1",
+    "transformers>=4.40,<5",
+    "torchaudio>=2.1,<3",
+    "scipy>=1.10,<2",
+    "huggingface-hub>=0.34,<3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.11",
+    "basedpyright>=1.28",
+    "num2words>=0.5.14,<0.6",
+]
+
+[project.scripts]
+tiny-voca-ru-speak = "tiny_voca_ru.infer:main"
+tiny-voca-ru-export = "tiny_voca_ru.export:main"
+tiny-voca-ru-convert = "tiny_voca_ru.checkpoint:main"
+tiny-voca-ru-prepare = "tiny_voca_ru.train.prepare:main"
+tiny-voca-ru-train = "tiny_voca_ru.train.train:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tiny_voca_ru = ["frontend/data/*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/tiny_voca_ru/frontend/tables.py" = ["E501"]
+"tests/test_web.py" = ["E501"]
+[tool.basedpyright]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+include = ["src", "tests"]
+exclude = ["**/__pycache__", ".venv", "checkpoints", "web"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

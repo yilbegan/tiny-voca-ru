@@ -1,0 +1,24 @@
+tiny-voca-ru
+A lightweight 4.5M-parameter Russian text-to-speech model.
+
+This project is based on tiny-voca:
+  tiny-voca, Copyright 2026 Muhammed Nazeem
+  https://github.com/n4ze3m/tiny-voca
+  Apache License 2.0, commit db851f75c6287a15be4c4e995f931bce3a86b47b
+
+The model architecture and training recipe originate from tiny-voca.
+Changes for Russian include the pure-Python Russian text frontend
+(src/tiny_voca_ru/frontend/: text normalization, stress placement, G2P rules,
+and 61-symbol Russian phoneme inventory), Russian forced-alignment calibration,
+safetensors checkpoint support, ONNX inference/export, and the Russian browser
+demo.
+
+The code is licensed under the Apache License 2.0 (see LICENSE).
+
+The stress dictionary (stress.txt.gz) and unknown-word accent model
+(accent.onnx) in src/tiny_voca_ru/frontend/data/ are derived from ruaccent:
+  https://github.com/Den4ikAI/ruaccent
+  https://huggingface.co/ruaccent/accentuator
+  MIT License (see src/tiny_voca_ru/frontend/data/LICENSE-ruaccent).
+
+tiny-voca-ru is not an official tiny-voca release.
