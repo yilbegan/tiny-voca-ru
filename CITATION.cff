@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use tiny-voca-ru or its dataset, please cite it using this metadata."
+title: "tiny-voca-ru"
+type: software
+version: "0.1.0"
+date-released: "2026-11-19"
+license: Apache-2.0
+authors:
+  - given-names: Evgeniy
+    family-names: Chetvertkov
+    orcid: "https://orcid.org/0009-0006-6158-2624"
+repository-code: "https://github.com/yilbegan/tiny-voca-ru"
+url: "https://huggingface.co/egnch/tiny-voca-ru"
+keywords:
+  - text-to-speech
+  - tts
+  - russian
+  - onnx
+  - speech-synthesis
+  - tiny-voca
+references:
+  - type: software
+    title: "tiny-voca: a 4.5M-parameter two-voice English text-to-speech model"
+    authors:
+      - given-names: Muhammed
+        family-names: Nazeem
+    year: 2026
+    url: "https://huggingface.co/n4ze3m/tiny-voca"
+    repository-code: "https://github.com/n4ze3m/tiny-voca"
+    license: Apache-2.0

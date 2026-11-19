@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,19 +7,46 @@ name = "tiny-voca-ru"
 version = "0.1.0"
 description = "A lightweight 4.5M-parameter Russian text-to-speech model"
 readme = "README.md"
-authors = [{ name = "Muhammed Nazeem" }, { name = "tiny-voca-ru contributors" }]
-license = { text = "Apache-2.0" }
+authors = [{ name = "Evgeniy Chetvertkov" }]
+license = "Apache-2.0"
+license-files = [
+    "LICENSE",
+    "NOTICE",
+    "src/tiny_voca_ru/frontend/data/LICENSE-ruaccent",
+]
 requires-python = ">=3.10"
+keywords = ["tts", "text-to-speech", "russian", "onnx", "speech-synthesis", "tiny-voca"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Russian",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = ["numpy>=1.24,<3"]
 
+[project.urls]
+Homepage = "https://github.com/yilbegan/tiny-voca-ru"
+Repository = "https://github.com/yilbegan/tiny-voca-ru"
+Model = "https://huggingface.co/egnch/tiny-voca-ru"
+Dataset = "https://huggingface.co/datasets/egnch/tiny-voca-ru-dataset"
+Demo = "https://huggingface.co/spaces/egnch/tiny-voca-ru-demo"
+
 [project.optional-dependencies]
-onnx = ["onnxruntime>=1.17,<2", "soundfile>=0.12,<1"]
+onnx = ["onnxruntime>=1.17,<2", "soundfile>=0.12,<1", "huggingface-hub>=0.34,<3"]
 torch = [
     "torch>=2.4,<3",
     "safetensors>=0.4,<1",
     "soundfile>=0.12,<1",
     "onnxruntime>=1.17,<2",
     "onnx>=1.15,<2",
+    "huggingface-hub>=0.34,<3",
 ]
 ruaccent = [
     "ruaccent==1.5.8.3",

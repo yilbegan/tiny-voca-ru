@@ -1,44 +1,50 @@
 # tiny-voca-ru
 
-A lightweight 4.5M-parameter Russian text-to-speech model with a pure-Python Russian text frontend, safetensors checkpoints, ONNX Runtime inference, custom-voice fine-tuning, and a client-side browser demo.
+English | [Русский](https://github.com/yilbegan/tiny-voca-ru/blob/main/README.ru.md)
 
-- **Architecture:** Non-autoregressive rotary transformer with duration/prosody predictors and a pitch-driven harmonic-plus-noise source-filter vocoder (4,534,411 parameters, 24 kHz mono).
-- **Voices:** Two built-in synthetic voices (`F` and `M`), plus single-command fine-tuning to adapt to a custom Russian speaker.
-- **Zero-Torch Frontend:** `tiny_voca_ru.frontend` has no PyTorch dependency (only stdlib + optional `onnxruntime` for OOV stress), so it runs cleanly in lightweight environments and Pyodide.
+A Russian adaptation of the 4.5M-parameter [`tiny-voca`](https://github.com/n4ze3m/tiny-voca) text-to-speech model with female and male voices (`F` and `M`), fast CPU inference, and client-side browser support.
+
+- **Model:** [`egnch/tiny-voca-ru`](https://huggingface.co/egnch/tiny-voca-ru)
+- **Dataset:** [`egnch/tiny-voca-ru-dataset`](https://huggingface.co/datasets/egnch/tiny-voca-ru-dataset)
+- **Demo:** [`egnch/tiny-voca-ru-demo`](https://huggingface.co/spaces/egnch/tiny-voca-ru-demo)
+- **PyPI:** [`tiny-voca-ru`](https://pypi.org/project/tiny-voca-ru/)
 
 ## Installation
 
-Requires Python 3.10+ and [`uv`](https://docs.astral.sh/uv/) (or `pip`).
+Requires Python 3.10+. Works with `pip` or [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-# Minimal Russian text frontend only
-uv pip install -e .
+# Text frontend only
+pip install tiny-voca-ru
 
-# Lightweight ONNX Runtime inference (no PyTorch)
-uv pip install -e ".[onnx]"
+# ONNX Runtime inference (no PyTorch)
+pip install "tiny-voca-ru[onnx]"
 
-# PyTorch inference + safetensors + ONNX export
-uv pip install -e ".[torch]"
+# PyTorch inference + ONNX export
+pip install "tiny-voca-ru[torch]"
 
-# Full training & custom-voice fine-tuning stack
-uv pip install -e ".[train]"
+# Training & custom-voice fine-tuning
+pip install "tiny-voca-ru[train]"
 
-# Optional full ruaccent homograph disambiguation
-uv pip install -e ".[ruaccent]"
+# Optional: ruaccent for homograph disambiguation
+pip install "tiny-voca-ru[ruaccent]"
 ```
 
-## Quick Start: Inference
+## Quick Start
 
-`Synthesizer` automatically selects the PyTorch backend for safetensors checkpoint directories (`model.safetensors` + `config.json`) and the ONNX Runtime backend for exported ONNX directories (`model.onnx` + `model.json`).
+`Synthesizer` loads models from Hugging Face Hub or a local directory, selecting PyTorch or ONNX Runtime automatically.
 
 ### Python API
 
 ```python
 from tiny_voca_ru import Synthesizer
 
-# Works with either a safetensors directory or an ONNX directory
-synth = Synthesizer("checkpoints/tiny-voca-ru")
-# synth = Synthesizer("checkpoints/tiny-voca-ru-onnx")
+# Load from Hugging Face Hub
+synth = Synthesizer.from_pretrained("egnch/tiny-voca-ru")
+# ONNX Runtime backend
+# synth = Synthesizer.from_pretrained("egnch/tiny-voca-ru", backend="onnx")
+# Local directory
+# synth = Synthesizer("checkpoints/tiny-voca-ru")
 
 result = synth.save_wav(
     "Здравствуйте! Встречу перенесли на 15:30, 14 марта.",
@@ -48,7 +54,7 @@ result = synth.save_wav(
     pitch_shift=0.0,  # log-F0 offset (0.058 ≈ +1 semitone)
     pitch_range=1.0,  # 0.0 .. 3.0
     stress="lite",  # "lite" | "ruaccent" | "none"
-    pause_seconds=0.0,  # optional silence gap between sentences
+    pause_seconds=0.0,  # pause between sentences (seconds)
 )
 ```
 
@@ -56,22 +62,29 @@ result = synth.save_wav(
 
 ```bash
 tiny-voca-ru-speak \
-  --model checkpoints/tiny-voca-ru \
   --voice F \
   --text "Привет! Билет стоит 1250 рублей." \
   --output out.wav
 
-# Same CLI with lightweight ONNX Runtime backend
+# ONNX Runtime backend
 tiny-voca-ru-speak \
-  --model checkpoints/tiny-voca-ru-onnx \
+  --model egnch/tiny-voca-ru \
+  --backend onnx \
   --voice M \
   --text "Привет! Билет стоит 1250 рублей." \
   --output out_onnx.wav
+
+# Local checkpoint
+tiny-voca-ru-speak \
+  --model checkpoints/tiny-voca-ru \
+  --voice F \
+  --text "Привет! Билет стоит 1250 рублей." \
+  --output out_local.wav
 ```
 
 ## Russian Text Frontend
 
-`tiny_voca_ru.frontend` normalizes Russian text (numbers, dates, times, currencies, units, Roman numerals, abbreviations, acronyms, Latin words), places lexical stress, and produces the 61-symbol IPA phoneme sequence.
+`tiny_voca_ru.frontend` is a pure-Python Russian frontend for text normalization (numbers, dates, times, currencies, units, abbreviations, Latin words), stress placement, and conversion to a 61-symbol IPA sequence.
 
 ```python
 from tiny_voca_ru import accentuate, normalize, phonemize, transcribe
@@ -79,22 +92,20 @@ from tiny_voca_ru import accentuate, normalize, phonemize, transcribe
 normalize("В 1999 году билет стоил 12,50 руб.")
 accentuate("Я открыл зам+ок ключом.")  # explicit '+' marks are preserved
 transcribe("Здравствуйте!")  # readable IPA with ˈ
-seq = phonemize("Привет, мир!", stress="lite")  # PhoneSequence(symbols, ids, stress, unknown)
+seq = phonemize("Привет, мир!", stress="lite")
 ```
 
-### Stress Providers
-
-| Provider | Dependencies | Notes |
+| Stress Provider | Dependencies | Notes |
 | --- | --- | --- |
-| `lite` (default) | Bundled `stress.txt.gz` + `accent.onnx` (`onnxruntime`) | Fast, offline, works in browser via JS `accent.onnx` |
-| `ruaccent` | `.[ruaccent]` | Full `ruaccent` (`turbo3.1`) neural homograph resolver |
-| `none` | None | Leaves existing `+` stress marks untouched |
+| `lite` (default) | Bundled `stress.txt.gz` + `accent.onnx` (`onnxruntime`) | Fast, offline, runs in browser |
+| `ruaccent` | `tiny-voca-ru[ruaccent]` | Full `ruaccent` (`turbo3.1`) homograph resolver |
+| `none` | None | Keeps existing `+` marks only |
 
 ## Custom-Voice Fine-Tuning
 
 ### 1. Prepare a dataset
 
-Create a `metadata.csv` (or `metadata.jsonl`) with columns `audio`, `text`, and optional `speaker`, `split`, `id`:
+Create `metadata.csv` (or `metadata.jsonl`) with `audio`, `text`, and optional `speaker`, `split`, `id`:
 
 ```csv
 audio,text,speaker
@@ -102,7 +113,7 @@ wavs/001.wav,Добрый день! Как ваши дела?,alice
 wavs/002.wav,Сегодня отличная погода.,alice
 ```
 
-Run feature extraction (24 kHz mono resampling, mel, `pyin` pitch/voicing, RMS) and `wav2vec2` CTC forced alignment:
+Extract 24 kHz features and `wav2vec2` CTC alignments:
 
 ```bash
 tiny-voca-ru-prepare \
@@ -112,9 +123,9 @@ tiny-voca-ru-prepare \
   --val-ratio 0.05
 ```
 
-### 2. Fine-tune from a pretrained checkpoint
+### 2. Fine-tune
 
-When fine-tuning onto a new speaker list (e.g., pretrained `("F", "M")` -> custom `("alice",)`), `tiny-voca-ru-train` copies all compatible weights and initializes the new speaker embeddings from `--init-voice` (or the mean of pretrained voices if omitted):
+`tiny-voca-ru-train` copies compatible weights from a pretrained checkpoint and initializes new speaker embeddings from `--init-voice` (or the mean of pretrained voices):
 
 ```bash
 tiny-voca-ru-train \
@@ -127,17 +138,17 @@ tiny-voca-ru-train \
   --save-every 500
 ```
 
-Add `--freeze-encoder` for small datasets (< 30 min) to keep the phoneme encoder fixed while adapting duration, prosody, and acoustics. Resume an interrupted run with `--resume work/alice-run/last.pt`. Clean safetensors checkpoints are written to `work/alice-run/inference/` and `work/alice-run/best/`.
+Use `--freeze-encoder` for small datasets (< 30 min) and `--resume work/alice-run/last.pt` to resume. Safetensors checkpoints are written to `work/alice-run/inference/` and `work/alice-run/best/`.
 
-## ONNX Export & Legacy Checkpoint Conversion
+## ONNX Export & Checkpoint Conversion
 
 ```bash
-# Export safetensors checkpoint -> model.onnx + model.json
+# Safetensors -> ONNX
 tiny-voca-ru-export \
   --checkpoint checkpoints/tiny-voca-ru \
   --output checkpoints/tiny-voca-ru-onnx
 
-# Convert a legacy .pt checkpoint -> model.safetensors + config.json
+# Legacy .pt -> safetensors
 tiny-voca-ru-convert \
   --source path/to/tiny-voca-ru.pt \
   --output checkpoints/tiny-voca-ru
@@ -145,7 +156,7 @@ tiny-voca-ru-convert \
 
 ## Browser Demo
 
-The static demo in `web/public/` runs `tiny_voca_ru.frontend` inside Pyodide and executes `model.onnx` + `accent.onnx` via ONNX Runtime Web completely offline in the browser:
+The static demo in `web/public/` runs entirely in the browser via Pyodide (`tiny_voca_ru.frontend`) and ONNX Runtime Web (`model.onnx` + `accent.onnx`):
 
 ```bash
 bash web/build_assets.sh checkpoints/tiny-voca-ru-onnx
@@ -162,7 +173,23 @@ uv run ruff format --check .
 uv run basedpyright
 ```
 
+## Citation
+
+Metadata is also available in [CITATION.cff](https://github.com/yilbegan/tiny-voca-ru/blob/main/CITATION.cff).
+
+```bibtex
+@misc{chetvertkov2026tinyvocaru,
+  author = {Chetvertkov, Evgeniy},
+  title  = {tiny-voca-ru: A 4.5M-Parameter Russian Text-to-Speech Model},
+  year   = {2026},
+  url    = {https://huggingface.co/egnch/tiny-voca-ru},
+  note   = {ORCID: https://orcid.org/0009-0006-6158-2624}
+}
+```
+
+Please also cite the original [`tiny-voca`](https://huggingface.co/n4ze3m/tiny-voca) by Muhammed Nazeem (2026).
+
 ## License & Attribution
 
-Code is licensed under the Apache License 2.0 ([LICENSE](LICENSE)).
-See [NOTICE](NOTICE) for attribution to `tiny-voca` (Muhammed Nazeem, Apache-2.0) and `ruaccent` (MIT License, bundled stress dictionary and character accent model in `src/tiny_voca_ru/frontend/data/`).
+Code and weights: Apache-2.0 ([LICENSE](https://github.com/yilbegan/tiny-voca-ru/blob/main/LICENSE)).
+See [NOTICE](https://github.com/yilbegan/tiny-voca-ru/blob/main/NOTICE) for attribution to `tiny-voca` (Apache-2.0) and `ruaccent` (MIT, bundled `stress.txt.gz` and `accent.onnx` in `src/tiny_voca_ru/frontend/data/`).

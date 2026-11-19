@@ -20,13 +20,20 @@ from .frontend import (
 if TYPE_CHECKING:
     from .checkpoint import CheckpointMeta, convert_legacy_pt, load_checkpoint, save_checkpoint
     from .export import export_onnx
-    from .infer import OnnxSynthesizer, SynthesisResult, Synthesizer, TorchSynthesizer
+    from .infer import (
+        DEFAULT_HF_REPO_ID,
+        OnnxSynthesizer,
+        SynthesisResult,
+        Synthesizer,
+        TorchSynthesizer,
+    )
     from .model import TinyVoca
 
 __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
+    "DEFAULT_HF_REPO_ID",
     "SYMBOLS",
     "CheckpointMeta",
     "Config",
@@ -52,11 +59,11 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "load_checkpoint": (".checkpoint", "load_checkpoint"),
     "save_checkpoint": (".checkpoint", "save_checkpoint"),
     "export_onnx": (".export", "export_onnx"),
+    "DEFAULT_HF_REPO_ID": (".infer", "DEFAULT_HF_REPO_ID"),
     "OnnxSynthesizer": (".infer", "OnnxSynthesizer"),
     "SynthesisResult": (".infer", "SynthesisResult"),
     "Synthesizer": (".infer", "Synthesizer"),
     "TorchSynthesizer": (".infer", "TorchSynthesizer"),
-    "TinyVoca": (".model", "TinyVoca"),
 }
 
 
