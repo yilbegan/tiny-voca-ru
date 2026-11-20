@@ -25,9 +25,6 @@ pip install "tiny-voca-ru[torch]"
 
 # Training & custom-voice fine-tuning
 pip install "tiny-voca-ru[train]"
-
-# Optional: ruaccent for homograph disambiguation
-pip install "tiny-voca-ru[ruaccent]"
 ```
 
 ## Quick Start
@@ -53,7 +50,7 @@ result = synth.save_wav(
     speed=1.0,  # 0.25 .. 4.0
     pitch_shift=0.0,  # log-F0 offset (0.058 ≈ +1 semitone)
     pitch_range=1.0,  # 0.0 .. 3.0
-    stress="lite",  # "lite" | "ruaccent" | "none"
+    stress="lite",  # "lite" | "full" | "none"
     pause_seconds=0.0,  # pause between sentences (seconds)
 )
 ```
@@ -97,8 +94,8 @@ seq = phonemize("Привет, мир!", stress="lite")
 
 | Stress Provider | Dependencies | Notes |
 | --- | --- | --- |
-| `lite` (default) | Bundled `stress.txt.gz` + `accent.onnx` (`onnxruntime`) | Fast, offline, runs in browser |
-| `ruaccent` | `tiny-voca-ru[ruaccent]` | Full `ruaccent` (`turbo3.1`) homograph resolver |
+| `lite` (default) | Bundled `stress.txt.gz` + `accent.onnx` (`onnxruntime`) | Fast, offline |
+| `full` | `tiny-voca-ru[onnx]` (downloads 10 MB INT8 `omograph.onnx`) | Contextual homograph disambiguation (`tiny2.1` INT8) |
 | `none` | None | Keeps existing `+` marks only |
 
 ## Custom-Voice Fine-Tuning
@@ -156,7 +153,7 @@ tiny-voca-ru-convert \
 
 ## Browser Demo
 
-The static demo in `web/public/` runs entirely in the browser via Pyodide (`tiny_voca_ru.frontend`) and ONNX Runtime Web (`model.onnx` + `accent.onnx`):
+The static demo in `web/public/` runs entirely in the browser via Pyodide (`tiny_voca_ru.frontend`) and ONNX Runtime Web (`model.onnx` + `accent.onnx` + `omograph.onnx`):
 
 ```bash
 bash web/build_assets.sh checkpoints/tiny-voca-ru-onnx
@@ -192,4 +189,4 @@ Please also cite the original [`tiny-voca`](https://huggingface.co/n4ze3m/tiny-v
 ## License & Attribution
 
 Code and weights: Apache-2.0 ([LICENSE](https://github.com/yilbegan/tiny-voca-ru/blob/main/LICENSE)).
-See [NOTICE](https://github.com/yilbegan/tiny-voca-ru/blob/main/NOTICE) for attribution to `tiny-voca` (Apache-2.0) and `ruaccent` (MIT, bundled `stress.txt.gz` and `accent.onnx` in `src/tiny_voca_ru/frontend/data/`).
+See [NOTICE](https://github.com/yilbegan/tiny-voca-ru/blob/main/NOTICE) for attribution to `tiny-voca` (Apache-2.0) and `ruaccent` (MIT, bundled `stress.txt.gz`, `accent.onnx`, `omograph_vocab.txt.gz`, and quantized `omograph.onnx`).

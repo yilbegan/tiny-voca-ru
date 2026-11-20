@@ -336,7 +336,7 @@ def main() -> None:
     parser.add_argument(
         "--stressed", action="store_true", help="Input text already has '+' stress marks"
     )
-    parser.add_argument("--stress", choices=("lite", "ruaccent", "none"), default="lite")
+    parser.add_argument("--stress", choices=("lite", "full", "none"), default="lite")
     parser.add_argument(
         "--val-ratio",
         type=float,

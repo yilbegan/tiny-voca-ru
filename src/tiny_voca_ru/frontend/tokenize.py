@@ -48,7 +48,7 @@ class PhoneSequence:
 
 
 def stress_provider(stress: str | StressProvider | None = None) -> StressProvider:
-    """Resolve a stress provider name (``"lite"``, ``"ruaccent"``, ``"none"``) or instance."""
+    """Resolve a stress provider name (``"lite"``, ``"full"``, ``"none"``) or instance."""
     if stress is not None and not isinstance(stress, str):
         return stress
     return get_provider(stress or "lite")

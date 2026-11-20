@@ -25,9 +25,6 @@ pip install "tiny-voca-ru[torch]"
 
 # Обучение и дообучение на свой голос
 pip install "tiny-voca-ru[train]"
-
-# Опционально: ruaccent для разрешения омографов
-pip install "tiny-voca-ru[ruaccent]"
 ```
 
 ## Быстрый старт
@@ -53,7 +50,7 @@ result = synth.save_wav(
     speed=1.0,  # 0.25 .. 4.0
     pitch_shift=0.0,  # сдвиг log-F0 (0.058 ≈ +1 полутон)
     pitch_range=1.0,  # 0.0 .. 3.0
-    stress="lite",  # "lite" | "ruaccent" | "none"
+    stress="lite",  # "lite" | "full" | "none"
     pause_seconds=0.0,  # пауза между предложениями (в секундах)
 )
 ```
@@ -97,8 +94,8 @@ seq = phonemize("Привет, мир!", stress="lite")
 
 | Провайдер ударений | Зависимости | Примечания |
 | --- | --- | --- |
-| `lite` (по умолчанию) | Встроенные `stress.txt.gz` + `accent.onnx` (`onnxruntime`) | Быстрый, оффлайн, работает в браузере |
-| `ruaccent` | `tiny-voca-ru[ruaccent]` | Полный `ruaccent` (`turbo3.1`) с разрешением омографов |
+| `lite` (по умолчанию) | Встроенные `stress.txt.gz` + `accent.onnx` (`onnxruntime`) | Быстрый, полностью оффлайн |
+| `full` | `tiny-voca-ru[onnx]` (скачивает 10 МБ INT8 `omograph.onnx`) | Контекстное разрешение омографов (`tiny2.1` INT8) |
 | `none` | Нет | Оставляет только проставленные знаки `+` |
 
 ## Дообучение на свой голос
@@ -156,7 +153,7 @@ tiny-voca-ru-convert \
 
 ## Браузерное демо
 
-Статическое демо в `web/public/` работает полностью в браузере через Pyodide (`tiny_voca_ru.frontend`) и ONNX Runtime Web (`model.onnx` + `accent.onnx`):
+Статическое демо в `web/public/` работает полностью в браузере через Pyodide (`tiny_voca_ru.frontend`) и ONNX Runtime Web (`model.onnx` + `accent.onnx` + `omograph.onnx`):
 
 ```bash
 bash web/build_assets.sh checkpoints/tiny-voca-ru-onnx
@@ -192,4 +189,4 @@ uv run basedpyright
 ## Лицензия и атрибуция
 
 Код и веса: Apache-2.0 ([LICENSE](LICENSE)).
-См. [NOTICE](NOTICE) для атрибуции `tiny-voca` (Apache-2.0) и `ruaccent` (MIT, встроенные `stress.txt.gz` и `accent.onnx` в `src/tiny_voca_ru/frontend/data/`).
+См. [NOTICE](NOTICE) для атрибуции `tiny-voca` (Apache-2.0) и `ruaccent` (MIT, встроенные `stress.txt.gz`, `accent.onnx`, `omograph_vocab.txt.gz` и квантованная `omograph.onnx`).

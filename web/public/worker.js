@@ -10,12 +10,23 @@ importScripts(PYODIDE + "pyodide.js", ORT + "ort.wasm.min.js");
 ort.env.wasm.wasmPaths = ORT;
 ort.env.wasm.numThreads = 1;
 
-let pyodide, phonemize, unknownWords, learnStress, session, accent, config;
+let pyodide, phonemize, unknownWords, learnStress, homographQueries, accentuateSentence;
+let session, accent, omograph, config;
 
 const status = (text, progress) => postMessage({ type: "status", text, progress });
+const downloads = new Map();
+function reportDownloads(label) {
+  let received = 0;
+  let total = 0;
+  for (const item of downloads.values()) {
+    received += item.received;
+    total += item.total;
+  }
+  status(label, total ? received / total : undefined);
+}
 
 // Bump when files under assets/ change so browsers refresh cached assets.
-const VERSION = "ru-2";
+const VERSION = "ru-3";
 
 async function download(url, label) {
   const key = `${url}?v=${VERSION}`;
@@ -38,12 +49,14 @@ async function fetchBytes(url, label) {
   const reader = response.body.getReader();
   const chunks = [];
   let received = 0;
+  downloads.set(url, { received: 0, total });
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);
     received += value.length;
-    status(label, received / total);
+    downloads.set(url, { received, total });
+    reportDownloads(label);
   }
   const bytes = new Uint8Array(received);
   let offset = 0;
@@ -62,17 +75,21 @@ import json, sys
 sys.path.insert(0, "/phonemizer")
 from tiny_voca_ru import frontend
 
-def phonemize_json(sentence):
+provider = frontend.stress_provider()
+
+def phonemize_json(sentence, stressed=False):
     try:
-        result = frontend.phonemize(sentence)
+        result = frontend.phonemize(sentence, stressed=stressed)
     except frontend.NothingToPronounce:
         return "null"
     return json.dumps(
-        {"ids": list(result.ids), "stress": list(result.stress), "text": frontend.transcribe(sentence)},
+        {
+            "ids": list(result.ids),
+            "stress": list(result.stress),
+            "text": frontend.transcribe(sentence, stressed=stressed),
+        },
         ensure_ascii=False,
     )
-
-provider = frontend.stress_provider()
 
 def unknown_json(raw):
     return json.dumps(
@@ -83,11 +100,28 @@ def unknown_json(raw):
 def learn_stress(word, logits):
     provider.extra[word] = frontend.stress_from_logits(word, json.loads(logits))
 
+def homographs_json(sentence):
+    normalized = frontend.normalize(sentence)
+    queries = [
+        [start, end, candidates, frontend.omograph_input_ids(normalized, start, end, candidates)]
+        for start, end, candidates in provider.homographs(normalized)
+    ]
+    return json.dumps({"text": normalized, "queries": queries}, ensure_ascii=False)
+
+def accentuate_json(normalized, resolved_json):
+    overrides = {
+        (int(start), int(end)): reading
+        for start, end, reading in json.loads(resolved_json)
+    }
+    return provider.accentuate_with(normalized, overrides)
+
 phonemize_json("Разминка.")
 `);
   phonemize = pyodide.globals.get("phonemize_json");
   unknownWords = pyodide.globals.get("unknown_json");
   learnStress = pyodide.globals.get("learn_stress");
+  homographQueries = pyodide.globals.get("homographs_json");
+  accentuateSentence = pyodide.globals.get("accentuate_json");
 }
 
 async function loadModel() {
@@ -105,6 +139,12 @@ async function loadAccent() {
   accent = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
 }
 
+// INT8 tiny2.1 contextual homograph resolver.
+async function loadOmograph() {
+  const bytes = await download("assets/omograph.onnx", "Загрузка модели омографов");
+  omograph = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
+}
+
 async function stressUnknownWords(text) {
   for (const [word, ids] of JSON.parse(unknownWords(text))) {
     const integers = (values) => new ort.Tensor("int64", BigInt64Array.from(values.map(BigInt)), [1, ids.length]);
@@ -116,6 +156,29 @@ async function stressUnknownWords(text) {
     const logits = Array.from(output.logits.data);
     learnStress(word, JSON.stringify(ids.map((_, i) => logits.slice(3 * i, 3 * i + 3))));
   }
+}
+
+async function resolveHomographs(sentence) {
+  const { text, queries } = JSON.parse(homographQueries(sentence));
+  if (!queries.length) return accentuateSentence(text, "[]");
+  const chosen = [];
+  for (const [start, end, candidates, sequences] of queries) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+    for (let i = 0; i < sequences.length; i++) {
+      const ids = sequences[i];
+      const integers = (values) => new ort.Tensor("int64", BigInt64Array.from(values.map(BigInt)), [1, ids.length]);
+      const output = await omograph.run({
+        input_ids: integers(ids),
+        attention_mask: integers(ids.map(() => 1)),
+      });
+      const logits = output.logits.data;
+      const score = logits[1] - logits[0];
+      if (score > bestScore) { bestScore = score; bestIndex = i; }
+    }
+    chosen.push([start, end, candidates[bestIndex]]);
+  }
+  return accentuateSentence(text, JSON.stringify(chosen));
 }
 
 // Keep sentence splitting and terminal punctuation in sync with tiny_voca_ru.frontend.tokenize.
@@ -141,7 +204,7 @@ function finished(text) {
 }
 
 function fit(sentence) {
-  const result = JSON.parse(phonemize(sentence));
+  const result = JSON.parse(phonemize(sentence, true));
   if (!result) return [];
   if (result.ids.length <= config.model.max_tokens - 12) return [result];
   const pieces = sentence.split(/(?<=[,;:—])\s+/);
@@ -184,7 +247,8 @@ async function speak({ id, text, voice, speed }) {
   let modelTime = 0;
   for (let index = 0; index < list.length; index++) {
     let mark = performance.now();
-    const utterances = fit(list[index]);
+    const stressed = await resolveHomographs(list[index]);
+    const utterances = fit(stressed);
     phonemeTime += performance.now() - mark;
     for (const phones of utterances) {
       mark = performance.now();
@@ -233,7 +297,8 @@ async function speak({ id, text, voice, speed }) {
 onmessage = async ({ data }) => {
   try {
     if (data.type === "load") {
-      await Promise.all([loadPhonemizer(), loadModel(), loadAccent()]);
+      downloads.clear();
+      await Promise.all([loadPhonemizer(), loadModel(), loadAccent(), loadOmograph()]);
       postMessage({ type: "ready", voices: config.voices, sampleRate: config.sample_rate });
     } else if (data.type === "speak") {
       await stressUnknownWords(data.text);

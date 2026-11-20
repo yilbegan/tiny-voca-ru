@@ -3,17 +3,19 @@
 #
 #   bash web/build_assets.sh checkpoints/tiny-voca-ru-onnx [output_dir]
 #
-# Packages model.onnx, config.json, accent.onnx, and phonemizer.zip
-# (tiny_voca_ru.frontend + stress.txt.gz for Pyodide, without accent.onnx).
+# Packages model.onnx, config.json, accent.onnx, omograph.onnx, and phonemizer.zip
+# (tiny_voca_ru.frontend + stress.txt.gz + omograph_vocab.txt.gz for Pyodide, without .onnx files).
 set -euo pipefail
 
 INPUT="$(realpath "${1:?path to ONNX directory (model.onnx + model.json) or model.onnx file}")"
 if [ -d "$INPUT" ]; then
   MODEL="$INPUT/model.onnx"
   META="$INPUT/model.json"
+  SRC_DIR="$INPUT"
 else
   MODEL="$INPUT"
   META="${INPUT%.onnx}.json"
+  SRC_DIR="$(dirname "$INPUT")"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,6 +25,20 @@ mkdir -p "$OUT_DIR"
 cp "$MODEL" "$OUT_DIR/model.onnx"
 cp "$SCRIPT_DIR/../src/tiny_voca_ru/frontend/data/accent.onnx" "$OUT_DIR/accent.onnx"
 
+if [ -f "$SRC_DIR/omograph.onnx" ]; then
+  cp "$SRC_DIR/omograph.onnx" "$OUT_DIR/omograph.onnx"
+elif [ ! -f "$OUT_DIR/omograph.onnx" ]; then
+  PYTHON="${PYTHON:-python3}"
+  if [ -x "$SCRIPT_DIR/../.venv/bin/python" ]; then
+    PYTHON="$SCRIPT_DIR/../.venv/bin/python"
+  fi
+  PYTHONPATH="$SCRIPT_DIR/../src" "$PYTHON" - "$OUT_DIR/omograph.onnx" <<'PY'
+import sys
+from tiny_voca_ru.frontend.omograph import export_omograph_onnx
+
+export_omograph_onnx(sys.argv[1])
+PY
+fi
 python3 - "$META" "$OUT_DIR/config.json" <<'PY'
 import json
 import sys

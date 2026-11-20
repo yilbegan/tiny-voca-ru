@@ -5,10 +5,16 @@ from __future__ import annotations
 from .clean import NotNormalized, clean
 from .g2p import phrase_phones
 from .normalize import normalize
+from .omograph import (
+    choose_reading,
+    export_omograph_onnx,
+    omograph_input_ids,
+    wordpiece_ids,
+)
 from .stress import (
+    FullStress,
     LiteStress,
     NoStress,
-    RuaccentStress,
     StressProvider,
     accent_input_ids,
     stress_from_logits,
@@ -69,20 +75,23 @@ __all__ = [
     "VOWELS",
     "VOWEL_IDS",
     "VOWEL_SET",
+    "FullStress",
     "LiteStress",
     "NoStress",
     "NotNormalized",
     "NothingToPronounce",
     "PhoneSequence",
-    "RuaccentStress",
     "StressProvider",
     "accent_input_ids",
     "accentuate",
+    "choose_reading",
     "clean",
     "encode_text",
     "ensure_terminal_punctuation",
+    "export_omograph_onnx",
     "is_phone",
     "normalize",
+    "omograph_input_ids",
     "phonemize",
     "phrase_phones",
     "pieces",
@@ -93,4 +102,5 @@ __all__ = [
     "tokenize",
     "transcribe",
     "unknown_words",
+    "wordpiece_ids",
 ]

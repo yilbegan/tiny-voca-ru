@@ -5,11 +5,16 @@ from __future__ import annotations
 import gzip
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import cache
 from importlib import resources
+from pathlib import Path
 from typing import Any
 
+from .omograph import choose_reading, omograph_input_ids
+
+DEFAULT_OMOGRAPH_REPO = "egnch/tiny-voca-ru"
+DEFAULT_OMOGRAPH_FILENAME = "onnx/omograph.onnx"
 VOWELS = "аеёиоуыэюя"
 
 # Function words normally unstressed (ambiguous words like да, что, то, надо stay out).
@@ -109,7 +114,6 @@ PREFERRED: dict[str, str] = {
 } | _PATRONYMICS
 
 WORD = re.compile(r"[а-яё+]+(?:-[а-яё+]+)*", re.IGNORECASE)
-_LETTERS = re.compile(r"[а-яё+]+", re.IGNORECASE)
 
 # Character vocabulary of ruaccent's nn_accent ONNX model in id order.
 ACCENT_VOCAB: tuple[str, ...] = (
@@ -223,6 +227,33 @@ class LiteStress(StressProvider):
         stressed = implied(word)
         return [stressed] if stressed else []
 
+    def homograph_readings(self, word: str) -> list[str]:
+        """Return spelling-preserving ``+``-marked readings when ``word`` is a homograph."""
+        lower = word.lower().replace("+", "")
+        cands = [r for r in self.readings(lower) if "+" in r and r.replace("+", "") == lower]
+        return cands if len(cands) > 1 else []
+
+    def homographs(self, text: str) -> list[tuple[int, int, list[str]]]:
+        """Return ``(start, end, candidates)`` for every homograph span in ``text``."""
+        found: list[tuple[int, int, list[str]]] = []
+        for match in WORD.finditer(text):
+            word = match.group()
+            if "+" in word:
+                continue
+            if "-" in word and self.lexicon.get(fold(word)):
+                cands = self.homograph_readings(word)
+                if cands:
+                    found.append((match.start(), match.end(), cands))
+                continue
+            pos = match.start()
+            for part, lower in zip(word.split("-"), _parts(word), strict=False):
+                if lower:
+                    cands = self.homograph_readings(lower)
+                    if cands:
+                        found.append((pos, pos + len(part), cands))
+                pos += len(part) + 1
+        return found
+
     def unknown_words(self, text: str) -> list[str]:
         """Return deduplicated OOV words that cannot be stressed without an external model."""
         if self._predict_fn is not None or _accent_session() is not None:
@@ -242,7 +273,11 @@ class LiteStress(StressProvider):
         return list(unknown)
 
     def accentuate(self, text: str) -> str:
-        return _rewrite(text, self._stress)
+        return self.accentuate_with(text, {})
+
+    def accentuate_with(self, text: str, overrides: Mapping[tuple[int, int], str]) -> str:
+        """Stress ``text``, using ``overrides[(start, end)]`` for disambiguated homographs."""
+        return _rewrite(text, lambda start, word: self._stress_span(start, word, overrides))
 
     def _known(self, part: str) -> str | None:
         found = self.readings(part)
@@ -255,65 +290,79 @@ class LiteStress(StressProvider):
             return self._predict_fn(word)
         return _predict(word)
 
-    def _stress(self, word: str) -> str:
+    def _stress_span(self, start: int, word: str, overrides: Mapping[tuple[int, int], str]) -> str:
         if "+" in word:
             return word
         full = self.lexicon.get(fold(word)) if "-" in word else None
         if full:
-            return apply(word, full[0])
+            chosen = overrides.get((start, start + len(word))) or full[0]
+            return apply(word, chosen)
         out: list[str] = []
+        pos = start
         for part, lower in zip(word.split("-"), _parts(word), strict=False):
-            stressed = (self._known(lower) or self._predict_word(lower)) if lower else None
+            chosen = overrides.get((pos, pos + len(part))) if lower else None
+            stressed = (
+                (chosen or self._known(lower) or self._predict_word(lower)) if lower else None
+            )
             out.append(apply(part, stressed) if stressed and fold(stressed) == fold(part) else part)
+            pos += len(part) + 1
         return "-".join(out)
 
 
-class RuaccentStress(StressProvider):
-    """Optional full ``ruaccent`` provider with neural homograph disambiguation."""
+class FullStress(LiteStress):
+    """Bundled dictionary + ``accent.onnx`` plus INT8 ``tiny2.1`` homograph resolver."""
 
-    name: str = "ruaccent"
-    REPO: str = "ruaccent/accentuator"
-    REVISION: str = "b78ae5ea1e62beaf138bed1865cd8c3b0b5ca855"
+    name: str = "full"
+    REPO: str = DEFAULT_OMOGRAPH_REPO
+    FILENAME: str = DEFAULT_OMOGRAPH_FILENAME
 
-    def __init__(self, model: str = "turbo3.1") -> None:
-        from huggingface_hub import snapshot_download
-        from ruaccent import RUAccent  # type: ignore[import-not-found]
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        *,
+        repo_id: str | None = None,
+        filename: str | None = None,
+        revision: str | None = None,
+        cache_dir: str | Path | None = None,
+        local_files_only: bool = False,
+        predict: Callable[[str], str | None] | None = None,
+        score: Callable[[Sequence[Sequence[int]]], Sequence[Sequence[float]]] | None = None,
+    ) -> None:
+        super().__init__(predict=predict)
+        self._score_fn = score
+        self._session: Any = None
+        if score is None:
+            self._session = _load_omograph_session(
+                model_path=model_path,
+                repo_id=repo_id or self.REPO,
+                filename=filename or self.FILENAME,
+                revision=revision,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+            )
 
-        workdir = snapshot_download(
-            self.REPO,
-            revision=self.REVISION,
-            allow_patterns=[
-                "dictionary/*",
-                "dictionary/rule_engine/*",
-                "nn/nn_accent/*",
-                "nn/nn_stress_usage_predictor/*",
-                "nn/nn_yo_homograph_resolver/*",
-                f"nn/nn_omograph/{model}/*",
-            ],
-        )
-        self.engine: Any = RUAccent()
-        self.engine.load(omograph_model_size=model, use_dictionary=True, workdir=workdir)
-        # Ensure token_type_ids is returned for newer tokenizers/transformers releases.
-        self.engine.accent_model.tokenizer.model_input_names = [
-            "input_ids",
-            "token_type_ids",
-            "attention_mask",
-        ]
+    def _score(self, sequences: Sequence[Sequence[int]]) -> list[list[float]]:
+        if self._score_fn is not None:
+            return [[float(x) for x in row] for row in self._score_fn(sequences)]
+        import numpy as np
+
+        logits: list[list[float]] = []
+        for seq in sequences:
+            ids = np.array([seq], dtype=np.int64)
+            feed = {"input_ids": ids, "attention_mask": np.ones_like(ids)}
+            row = self._session.run(["logits"], feed)[0][0]
+            logits.append([float(row[0]), float(row[1])])
+        return logits
 
     def accentuate(self, text: str) -> str:
-        stressed = iter(_LETTERS.findall(self.engine.process_all(text)))
-
-        def take(word: str) -> str:
-            parts: list[str] = []
-            for part in word.split("-"):
-                theirs = next(stressed, None)
-                if theirs is None or fold(theirs) != fold(part):
-                    raise ValueError(f"ruaccent changed the words of {text!r}")
-                reading = _PATRONYMICS.get(fold(part)) or str(theirs).lower()
-                parts.append(part if "+" in part else apply(part, reading))
-            return "-".join(parts)
-
-        return _rewrite(text, take)
+        queries = self.homographs(text)
+        if not queries:
+            return super().accentuate(text)
+        overrides: dict[tuple[int, int], str] = {}
+        for start, end, candidates in queries:
+            seqs = omograph_input_ids(text, start, end, candidates)
+            overrides[(start, end)] = choose_reading(candidates, self._score(seqs))
+        return self.accentuate_with(text, overrides)
 
 
 def _parts(word: str) -> list[str]:
@@ -338,10 +387,10 @@ def _finish(word: str) -> str:
     )
 
 
-def _rewrite(text: str, stress: Callable[[str], str]) -> str:
-    """Rewrite each word with ``stress(word)`` and apply the ``не был`` phrase rule."""
+def _rewrite(text: str, stress: Callable[[int, str], str]) -> str:
+    """Rewrite each word with ``stress(start, word)`` and apply the ``не был`` phrase rule."""
     matches = list(WORD.finditer(text))
-    words = [_finish(stress(m.group())) for m in matches]
+    words = [_finish(stress(m.start(), m.group())) for m in matches]
     for i in range(1, len(words)):
         between = text[matches[i - 1].end() : matches[i].start()]
         if (
@@ -413,16 +462,61 @@ def _predict(word: str) -> str | None:
     return stress_from_logits(word, logits)
 
 
+def _load_omograph_session(
+    *,
+    model_path: str | Path | None,
+    repo_id: str,
+    filename: str,
+    revision: str | None,
+    cache_dir: str | Path | None,
+    local_files_only: bool,
+) -> Any:
+    try:
+        import onnxruntime
+    except ImportError as err:
+        raise ImportError(
+            "onnxruntime is required for stress='full'; "
+            'install with `pip install "tiny-voca-ru[onnx]"`'
+        ) from err
+
+    if model_path is not None:
+        resolved = Path(model_path)
+        if not resolved.is_file():
+            raise FileNotFoundError(f"omograph ONNX model not found: {resolved}")
+    else:
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError as err:
+            raise ImportError(
+                "huggingface-hub is required to download omograph.onnx for stress='full'; "
+                'install with `pip install "tiny-voca-ru[onnx]"`'
+            ) from err
+        resolved = Path(
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                revision=revision,
+                cache_dir=str(cache_dir) if cache_dir is not None else None,
+                local_files_only=local_files_only,
+            )
+        )
+
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    return onnxruntime.InferenceSession(str(resolved), options, providers=["CPUExecutionProvider"])
+
+
 _PROVIDERS: dict[str, type[StressProvider]] = {
     "lite": LiteStress,
-    "ruaccent": RuaccentStress,
+    "full": FullStress,
     "none": NoStress,
 }
 
 
 @cache
 def get_provider(name: str = "lite") -> StressProvider:
-    """Return a cached stress provider by name (``"lite"``, ``"ruaccent"``, or ``"none"``)."""
+    """Return a cached stress provider by name (``"lite"``, ``"full"``, or ``"none"``)."""
     if name not in _PROVIDERS:
         raise ValueError(f"unknown stress provider {name!r}; expected one of {sorted(_PROVIDERS)}")
     return _PROVIDERS[name]()

@@ -1,8 +1,10 @@
-stress.txt.gz is a subset of the stress dictionary of RUAccent and accent.onnx
-is its nn_accent/model.onnx, both from https://huggingface.co/ruaccent/accentuator
+stress.txt.gz is a subset of the stress dictionary of RUAccent, accent.onnx is
+its nn_accent/model.onnx, omograph_vocab.txt.gz is the WordPiece vocabulary of
+its nn_omograph/tiny2.1 tokenizer, and omograph.onnx is an INT8 dynamic
+quantization of its nn_omograph/tiny2.1/model.onnx, all from
+https://huggingface.co/ruaccent/accentuator
 (revision b78ae5ea1e62beaf138bed1865cd8c3b0b5ca855), https://github.com/Den4ikAI/ruaccent.
 They are distributed under the MIT License below, not under this project's licence.
-stress.txt.gz is rebuilt by scripts/build_stress_lexicon.py.
 
 MIT License
 

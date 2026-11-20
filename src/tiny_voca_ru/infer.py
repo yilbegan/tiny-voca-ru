@@ -816,7 +816,7 @@ def main() -> None:
         "--pitch-range", type=float, default=1.0, help="Pitch range scale around utterance mean"
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--stress", choices=("lite", "ruaccent", "none"), default="lite")
+    parser.add_argument("--stress", choices=("lite", "full", "none"), default="lite")
     parser.add_argument(
         "--pause", type=float, default=0.0, help="Silence gap between sentences in seconds"
     )

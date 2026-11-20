@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use tiny-voca-ru or its dataset, please cite it using this metadata."
 title: "tiny-voca-ru"
 type: software
-version: "0.1.0"
-date-released: "2026-11-19"
+version: "0.2.0"
+date-released: "2026-11-20"
 license: Apache-2.0
 authors:
   - given-names: Evgeniy

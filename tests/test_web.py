@@ -131,13 +131,14 @@ const order = [];
 const messages = [];
 const phonemize = (sentence) => (/[A-Za-z]/.test(sentence.replace(/XD/g, ""))
                                  ? JSON.stringify({ text: sentence, ids: [1], stress: [0] }) : "null");
+const resolveHomographs = async (sentence) => sentence;
 const synthesize = async (phones) => { order.push("made " + phones.text); return wave(phones.text); };
 const postMessage = (message, transfer = []) => {
   order.push(message.type === "sentence" ? "sent " + message.phonemes : message.type);
   messages.push(structuredClone(message, { transfer }));
 };
 const config = { sample_rate: 24000, model: { max_tokens: 512 } };
-const speak = new Function("phonemize", "synthesize", "postMessage", "config", code)(phonemize, synthesize, postMessage, config);
+const speak = new Function("phonemize", "resolveHomographs", "synthesize", "postMessage", "config", code)(phonemize, resolveHomographs, synthesize, postMessage, config);
 const peak = (samples) => samples.reduce((most, value) => Math.max(most, Math.abs(value)), 0);
 
 speak({ id: 7, text: process.argv[2], voice: 0, speed: 1 }).then(() => {
@@ -178,11 +179,39 @@ const stressUnknownWords = new Function("ort", "accent", "unknownWords", "learnS
 stressUnknownWords("Ой, бух.").then(() => console.log(JSON.stringify({ asked, learned })));
 """
 
+OMOGRAPH = r"""
+const fs = require("fs");
+const source = fs.readFileSync(process.argv[1], "utf8");
+const code = source.match(/async function resolveHomographs\(sentence\) \{[\s\S]*?\n\}/)[0] + "\nreturn resolveHomographs;";
+
+class Tensor { constructor(type, data, dims) { Object.assign(this, { type, data: Array.from(data, Number), dims }); } }
+const ort = { Tensor };
+const asked = [];
+const omograph = { run: async (feeds) => {
+  asked.push(Object.fromEntries(Object.entries(feeds).map(([name, tensor]) => [name, { type: tensor.type, data: tensor.data, dims: tensor.dims }])));
+  const pickSecond = asked.length === 2;
+  return { logits: { data: Float32Array.from(pickSecond ? [-1, 4] : [3, -1]) } };
+} };
+const homographQueries = (sentence) => JSON.stringify({
+  text: sentence,
+  queries: sentence.includes("замок") ? [[8, 13, ["з+амок", "зам+ок"], [[2, 10, 30522, 11, 30523, 3, 20, 3], [2, 10, 30522, 11, 30523, 3, 21, 3]]]] : [],
+});
+const resolved = [];
+const accentuateSentence = (text, chosen) => { resolved.push([text, JSON.parse(chosen)]); return "OK:" + text; };
+const resolveHomographs = new Function("ort", "omograph", "homographQueries", "accentuateSentence", code)(ort, omograph, homographQueries, accentuateSentence);
+(async () => {
+  const outputs = [await resolveHomographs("Дверной замок."), await resolveHomographs("Привет.")];
+  console.log(JSON.stringify({ asked, resolved, outputs }));
+})();
+"""
+
 
 def glue(phonemizer: Any = frontend) -> types.SimpleNamespace:
     source = (PUBLIC / "worker.js").read_text(encoding="utf-8")
     match = re.search(
-        r"^def phonemize_json\(sentence\):\n[\s\S]*?(?=^phonemize_json\()", source, re.MULTILINE
+        r"^provider = frontend\.stress_provider\(\)\n[\s\S]*?(?=^phonemize_json\()",
+        source,
+        re.MULTILINE,
     )
     assert match is not None
     names: dict[str, Any] = {"json": json, "frontend": phonemizer}
@@ -190,7 +219,14 @@ def glue(phonemizer: Any = frontend) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         **{
             name: names[name]
-            for name in ("phonemize_json", "unknown_json", "learn_stress", "provider")
+            for name in (
+                "phonemize_json",
+                "unknown_json",
+                "learn_stress",
+                "homographs_json",
+                "accentuate_json",
+                "provider",
+            )
         }
     )
 
@@ -345,3 +381,88 @@ class BrowserGlueTests(unittest.TestCase):
         facts = node(STRESS, str(PUBLIC / "worker.js"))
         self.assertEqual(len(facts["asked"]), 2)
         self.assertEqual([word for word, _ in facts["learned"]], ["ой", "бух"])
+
+    @unittest.skipUnless(shutil.which("node"), "needs node to run demo JS")
+    def test_worker_resolves_homographs(self) -> None:
+        facts = node(OMOGRAPH, str(PUBLIC / "worker.js"))
+        self.assertEqual(len(facts["asked"]), 2)
+        self.assertEqual(facts["asked"][0]["input_ids"]["type"], "int64")
+        self.assertEqual(facts["asked"][0]["attention_mask"]["data"], [1] * 8)
+        self.assertEqual(
+            facts["resolved"],
+            [
+                ["Дверной замок.", [[8, 13, "зам+ок"]]],
+                ["Привет.", []],
+            ],
+        )
+        self.assertEqual(facts["outputs"], ["OK:Дверной замок.", "OK:Привет."])
+
+    def test_homographs_glue_and_manual_stress_example(self) -> None:
+        browser = glue()
+        payload = json.loads(browser.homographs_json("Дверной замок заржавел."))
+        self.assertEqual(len(payload["queries"]), 1)
+        start, end, candidates, sequences = payload["queries"][0]
+        self.assertEqual(candidates, ["з+амок", "зам+ок"])
+        self.assertEqual(len(sequences), 2)
+        stressed = browser.accentuate_json(payload["text"], json.dumps([[start, end, "зам+ок"]]))
+        self.assertIn("зам+ок", stressed)
+        said = json.loads(browser.phonemize_json(stressed, True))
+        self.assertEqual(said["text"], frontend.transcribe(stressed, stressed=True))
+
+        # Phrase stress rule ("не был") survives accentuated stressed=True phonemization.
+        ne_payload = json.loads(browser.homographs_json("Он не был дома."))
+        s0, e0, _, _ = ne_payload["queries"][0]
+        ne_stressed = browser.accentuate_json(ne_payload["text"], json.dumps([[s0, e0, "д+ома"]]))
+        self.assertIn("н+е был", ne_stressed)
+        self.assertIn("д+ома", ne_stressed)
+        ne_said = json.loads(browser.phonemize_json(ne_stressed, True))
+        self.assertEqual(ne_said["text"], frontend.transcribe(ne_stressed, stressed=True))
+
+        # Manual '+' words skip homograph disambiguation completely.
+        manual = json.loads(browser.homographs_json("Старый зам+ок на вор+отах з+амка."))
+        self.assertEqual(manual["queries"], [])
+
+    def test_homographs_resolved_via_local_onnx_omograph(self) -> None:
+        model = (
+            Path(__file__).resolve().parents[1]
+            / "checkpoints"
+            / "tiny-voca-ru-onnx"
+            / "omograph.onnx"
+        )
+        if not model.is_file():
+            self.skipTest("local omograph.onnx not present")
+        import numpy as np
+        import onnxruntime
+
+        browser = glue()
+        session = onnxruntime.InferenceSession(str(model), providers=["CPUExecutionProvider"])
+        sentence = (
+            "Она никогда раньше не видела моря и долго стояла у самой воды, не говоря ни слова."
+        )
+        payload = json.loads(browser.homographs_json(sentence))
+        chosen: list[list[Any]] = []
+        for start, end, candidates, sequences in payload["queries"]:
+            logits = [
+                np.asarray(
+                    session.run(
+                        ["logits"],
+                        {
+                            "input_ids": np.array([seq], dtype=np.int64),
+                            "attention_mask": np.ones((1, len(seq)), dtype=np.int64),
+                        },
+                    )[0]
+                )[0].tolist()
+                for seq in sequences
+            ]
+            chosen.append([start, end, frontend.choose_reading(candidates, logits)])
+        stressed = browser.accentuate_json(payload["text"], json.dumps(chosen))
+        self.assertIn("м+оря", stressed)
+        self.assertIn("с+амой", stressed)
+        self.assertIn("вод+ы", stressed)
+        self.assertIn("сл+ова", stressed)
+
+    def test_index_html_has_homograph_and_manual_stress_examples(self) -> None:
+        html = (PUBLIC / "index.html").read_text(encoding="utf-8")
+        self.assertIn('["Омографы",', html)
+        self.assertIn('["Ударения (+)",', html)
+        self.assertIn("зам+ок", html)

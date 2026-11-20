@@ -15,8 +15,10 @@ demo.
 
 The code is licensed under the Apache License 2.0 (see LICENSE).
 
-The stress dictionary (stress.txt.gz) and unknown-word accent model
-(accent.onnx) in src/tiny_voca_ru/frontend/data/ are derived from ruaccent:
+The stress dictionary (stress.txt.gz), unknown-word accent model (accent.onnx),
+homograph tokenizer vocabulary (omograph_vocab.txt.gz), and INT8-quantized
+homograph resolver (omograph.onnx, derived from nn/nn_omograph/tiny2.1) are
+derived from ruaccent:
   https://github.com/Den4ikAI/ruaccent
   https://huggingface.co/ruaccent/accentuator
   MIT License (see src/tiny_voca_ru/frontend/data/LICENSE-ruaccent).
