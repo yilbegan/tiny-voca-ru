@@ -11,7 +11,7 @@
 
 ## Установка
 
-Требуется Python 3.10+. Поддерживаются `pip` и [`uv`](https://docs.astral.sh/uv/).
+Требуется Python 3.11+. Поддерживаются `pip` и [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 # Только текстовый фронтенд

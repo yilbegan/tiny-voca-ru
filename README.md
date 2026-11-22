@@ -11,7 +11,7 @@ A Russian adaptation of the 4.5M-parameter [`tiny-voca`](https://github.com/n4ze
 
 ## Installation
 
-Requires Python 3.10+. Works with `pip` or [`uv`](https://docs.astral.sh/uv/).
+Requires Python 3.11+. Works with `pip` or [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 # Text frontend only
