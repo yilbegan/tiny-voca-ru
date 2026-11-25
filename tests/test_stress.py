@@ -166,6 +166,24 @@ class LiteStressTests(unittest.TestCase):
             "Пот+ом пор+а дом+ой, п+осле +ужина.",
         )
         self.assertEqual(self.lite.readings("потом"), ["пот+ом", "п+отом"])
+        for expected in (
+            "так+ая",
+            "том+у",
+            "должн+о",
+            "м+ало",
+            "н+ачал",
+            "п+ередал",
+            "светл+о",
+            "широк+о",
+            "ч+асти",
+            "с+оли",
+            "б+оли",
+            "к+ости",
+            "ж+еня",
+        ):
+            plain = expected.replace("+", "")
+            with self.subTest(word=plain):
+                self.assertEqual(self.lite.readings(plain)[0], expected)
 
     def test_standard_patronymics(self) -> None:
         self.assertEqual(self.lite.accentuate(PATRONYMICS.replace("+", "")), PATRONYMICS)

@@ -182,14 +182,15 @@ async function resolveHomographs(sentence) {
 }
 
 // Keep sentence splitting and terminal punctuation in sync with tiny_voca_ru.frontend.tokenize.
-const ABBREVIATIONS = /(?:(?<![\p{L}\p{N}_])(?:тыс|млн|млрд|руб|коп|долл|ул|пр|просп|пер|наб|пл|обл|кв|корп|стр|рис|табл|см|ср|напр|проф|акад|доц|им|св|гр|тел|др|т\.е|т\.д|т\.п|т\.к|т\.н)|(?<![\p{L}\p{N}_])[A-ZА-ЯЁ])\.$/iu;
+const ABBREVIATIONS = /(?<![\p{L}\p{N}_])(?:тыс|млн|млрд|руб|коп|долл|ул|пр|просп|пер|наб|пл|обл|кв|корп|стр|рис|табл|см|ср|напр|проф|акад|доц|им|св|гр|тел|др|т\.\s?е|т\.\s?д|т\.\s?п|т\.\s?к|т\.\s?н|г|д|п|т|ч|р|в|с|н)\.$/iu;
 
 function sentences(text) {
   const parts = [];
   let current = "";
-  for (const piece of text.replace(/\s+/g, " ").trim().split(/(?<=[.!?…]["')\]»“]?)\s+(?=["'(\[«„]?[A-ZА-ЯЁ0-9])/u)) {
+  for (const piece of text.replace(/\s+/g, " ").trim().split(/(?<=[.!?…]["')\]»“]?)\s+(?=["'(\[«„]?\+?[A-ZА-ЯЁ0-9])/u)) {
     current = current ? current + " " + piece : piece;
-    if (!ABBREVIATIONS.test(current)) { parts.push(current); current = ""; }
+    const plain = current.replace(/\+/g, "");
+    if (!ABBREVIATIONS.test(plain) && !/(?<![\p{L}\p{N}_])[A-ZА-ЯЁ]\.$/u.test(plain)) { parts.push(current); current = ""; }
   }
   if (current) parts.push(current);
   return parts.filter((part) => /[\p{L}\p{N}]/u.test(part));
@@ -248,7 +249,7 @@ async function speak({ id, text, voice, speed }) {
   for (let index = 0; index < list.length; index++) {
     let mark = performance.now();
     const stressed = await resolveHomographs(list[index]);
-    const utterances = fit(stressed);
+    const utterances = sentences(stressed).flatMap(fit);
     phonemeTime += performance.now() - mark;
     for (const phones of utterances) {
       mark = performance.now();

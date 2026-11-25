@@ -703,6 +703,7 @@ def signs(text: str) -> str:
     """Expand numeric signs and leading currency symbols (``-5``, ``+5``, ``~5``, ``$5``)."""
     text = re.sub(r"(?:(?<=[\s(\"])|^)[-–](?=\d)", "минус ", text)
     text = re.sub(r"(?:(?<=[\s(\"])|^)\+(?=\d)", "плюс ", text)
+    text = re.sub(rf"(?<=[A-Za-z{LETTER}\d)+])\+(?=\d)", " плюс ", text)
     text = re.sub(r"[~≈]\s?(?=\d)", "около ", text)
     text = re.sub(r"(?<=\d)\s?[×xхX*]\s?(?=\d)", " на ", text)
     return re.sub(
@@ -758,11 +759,41 @@ def latin(text: str) -> str:
 
 def transliterate(word: str) -> str:
     """Rule-based Latin-to-Cyrillic transliteration for lowercase words."""
-    if len(word) > 4 and word.endswith("e") and word[-2] not in "aeiouy":
-        word = word[:-1]
+    has_vowel = any(c in "aeiouy" for c in word)
     out: list[str] = []
     i = 0
     while i < len(word):
+        if i == 0 and word.startswith(("kn", "wr")):
+            out.append("н" if word[0] == "k" else "р")
+            i += 2
+            continue
+        if (
+            i == len(word) - 1
+            and word[i] == "e"
+            and (
+                (len(word) > 4 and word[i - 1] not in "aeiouy")
+                or (len(word) == 4 and word[1] == "u" and word[2] not in "aeiouyr")
+                or (len(word) == 3 and word[0] == "u" and word[1] not in "aeiouyr")
+                or (len(word) == 4 and word.endswith("dge"))
+            )
+        ):
+            break
+        if word.startswith("ation", i) and not word.startswith("ational", i):
+            out.append("ейшн")
+            i += 5
+            continue
+        if word.startswith("ssion", i):
+            out.append("шн")
+            i += 5
+            continue
+        if word.startswith("sion", i):
+            out.append("жн" if i > 0 and word[i - 1] in "aeiouy" else "шн")
+            i += 4
+            continue
+        if word.startswith("dg", i) and word[i + 2 : i + 3] in ("e", "i", "y"):
+            out.append("дж")
+            i += 2
+            continue
         if word[i] == "c" and word[i + 1 : i + 2] in ("e", "i", "y"):
             out.append("с")
             i += 1
@@ -771,9 +802,40 @@ def transliterate(word: str) -> str:
             out.append("й")
             i += 1
             continue
-        if word[i] == "e" and i == 0:
+        if word[i] == "e" and i == 0 and not word.startswith(("ee", "ea", "ew", "ey")):
             out.append("э")
             i += 1
+            continue
+        if (
+            word[i] == "e"
+            and word.startswith("ation", i + 1)
+            and not word.startswith("ational", i + 1)
+        ):
+            out.append("и")
+            i += 1
+            continue
+        if (
+            word[i] == "u"
+            and (i == 0 or word[i - 1] not in "aeiouyrlj")
+            and i + 2 < len(word)
+            and word[i + 1] not in "aeiouyr"
+            and word[i + 2] in "aeiouy"
+        ):
+            out.append("ю")
+            i += 1
+            continue
+        if (
+            has_vowel
+            and i + 1 < len(word)
+            and word[i] == word[i + 1]
+            and word[i] in "bdfglmnprst"
+            and not (word[i] == "s" and word[i + 2 : i + 3] == "h")
+        ):
+            for latin_part, cyrillic in LATIN_RULES:
+                if latin_part == word[i]:
+                    out.append(cyrillic)
+                    break
+            i += 2
             continue
         for latin_part, cyrillic in LATIN_RULES:
             if word.startswith(latin_part, i):
@@ -818,9 +880,37 @@ def standalone(text: str) -> str:
     return text
 
 
+_HOMOGLYPHS = str.maketrans("ABCEHKMOPTXaceopxy", "АВСЕНКМОРТХасеорху")
+_HOMOGLYPH_SET: frozenset[str] = frozenset("ABCEHKMOPTXaceopxy")
+_MIXED_TOKEN = re.compile(rf"[{LETTER}A-Za-z0-9+]+")
+_HAS_CYRILLIC = re.compile(rf"[{LETTER}]")
+_HAS_LATIN = re.compile(r"[A-Za-z]")
+_LEADING_LATIN_ACRONYM = re.compile(r"^[A-Z]{2,}")
+
+
+def homoglyphs(text: str) -> str:
+    """Replace visual Latin homoglyphs inside mixed Cyrillic+Latin words (no digits)."""
+
+    def fix(m: re.Match[str]) -> str:
+        token = m[0]
+        if (
+            any(c.isdigit() for c in token)
+            or not _HAS_CYRILLIC.search(token)
+            or not _HAS_LATIN.search(token)
+            or _LEADING_LATIN_ACRONYM.match(token)
+        ):
+            return token
+        if all(c in _HOMOGLYPH_SET for c in token if "A" <= c <= "Z" or "a" <= c <= "z"):
+            return token.translate(_HOMOGLYPHS)
+        return token
+
+    return _MIXED_TOKEN.sub(fix, text)
+
+
 def rules(text: str) -> str:
     """Run all Russian text normalization passes."""
     text = unify(re.sub(r"(?<=\d)(?=[½¼¾⅓⅔])", " и ", text))
+    text = homoglyphs(text)
     text = re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", text)  # MP3, 4K
     text = re.sub(
         rf"(?<=[{LETTER}A-Za-z])-(?=\d)|(?<=\d)-(?=[A-Za-z])", " ", text

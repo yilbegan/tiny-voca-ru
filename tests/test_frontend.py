@@ -100,10 +100,98 @@ class FrontendTests(unittest.TestCase):
         self.assertEqual(result.unknown, ())
         self.assertGreater(len(set(result.symbols) & PHONE_SET), 25)
 
+    def test_tokenize_safe_prosodic_punctuation(self) -> None:
+        w1 = [[("d", 0), ("o", 1), ("m", 0)]]
+        w2 = [[("t", 0), ("a", 1), ("m", 0)]]
+
+        # Parentheses emit ',' only between speech phones, never at boundaries or after pauses.
+        mid_parens = tokenize([(False, w1), (True, "("), (False, w2), (True, ")"), (True, ".")])
+        self.assertEqual(mid_parens.symbols, (BOS, "d", "o", "m", ",", "t", "a", "m", ".", EOS))
+        lead_parens = tokenize([(True, "("), (False, w1), (True, ")"), (False, w2)])
+        self.assertEqual(lead_parens.symbols, (BOS, "d", "o", "m", ",", "t", "a", "m", EOS))
+        after_comma = tokenize([(False, w1), (True, ","), (True, "("), (False, w2), (True, ")")])
+        self.assertEqual(after_comma.symbols, (BOS, "d", "o", "m", ",", "t", "a", "m", EOS))
+
+        # Ellipsis maps to '.' utterance-finally and ',' mid-utterance without duplicates.
+        final_ellip = tokenize([(False, w1), (True, "…")])
+        self.assertEqual(final_ellip.symbols, (BOS, "d", "o", "m", ".", EOS))
+        mid_ellip = tokenize([(False, w1), (True, "…"), (False, w2), (True, "…")])
+        self.assertEqual(mid_ellip.symbols, (BOS, "d", "o", "m", ",", "t", "a", "m", ".", EOS))
+        comma_ellip = tokenize([(False, w1), (True, ","), (True, "…")])
+        self.assertEqual(comma_ellip.symbols, (BOS, "d", "o", "m", ".", EOS))
+
+        # Single quotes are dropped while keeping word spacing.
+        quoted = tokenize([(False, w1), (True, "'"), (False, w2)])
+        self.assertEqual(quoted.symbols, (BOS, "d", "o", "m", SP, "t", "a", "m", EOS))
+
+        # Mid-utterance terminals remap to ','; redundant pauses are dropped.
+        mid_term = tokenize([(False, w1), (True, "!"), (False, w2), (True, ","), (True, "?")])
+        self.assertEqual(mid_term.symbols, (BOS, "d", "o", "m", ",", "t", "a", "m", "?", EOS))
+        dup_pause = tokenize([(False, w1), (True, ";"), (True, ","), (False, w2), (True, ".")])
+        self.assertEqual(dup_pause.symbols, (BOS, "d", "o", "m", ";", "t", "a", "m", ".", EOS))
+        paren_semi = tokenize(
+            [
+                (False, w1), (True, "("), (False, w2), (True, ")"),
+                (True, ";"), (False, w1), (True, "."),
+            ]
+        )
+        self.assertEqual(
+            paren_semi.symbols,
+            (BOS, "d", "o", "m", ",", "t", "a", "m", ";", "d", "o", "m", ".", EOS),
+        )
+        paren_dash = tokenize(
+            [
+                (False, w1), (True, "—"), (True, "("), (False, w2), (True, ")"),
+                (True, "—"), (False, w1), (True, "."),
+            ]
+        )
+        self.assertEqual(
+            paren_dash.symbols,
+            (BOS, "d", "o", "m", ",", "t", "a", "m", ",", "d", "o", "m", ".", EOS),
+        )
+        lead_trail_dash = tokenize([(True, "—"), (False, w1), (True, "—")])
+        self.assertEqual(lead_trail_dash.symbols, (BOS, "d", "o", "m", EOS))
+        quote_paren = tokenize(
+            [
+                (False, w1), (True, ","), (True, '"'), (True, "("),
+                (False, w2), (True, ")"), (True, '"'), (True, "!"),
+            ]
+        )
+        self.assertEqual(
+            quote_paren.symbols,
+            (BOS, "d", "o", "m", ",", '"', "t", "a", "m", '"', "!", EOS),
+        )
+        ellip_q = tokenize([(False, w1), (True, "…"), (True, "?")])
+        self.assertEqual(ellip_q.symbols, (BOS, "d", "o", "m", "?", EOS))
+        lead_comma = tokenize([(True, ","), (False, w1), (True, ".")])
+        self.assertEqual(lead_comma.symbols, (BOS, "d", "o", "m", ".", EOS))
+        semi_dot = tokenize([(False, w1), (True, ";"), (True, ".")])
+        self.assertEqual(semi_dot.symbols, (BOS, "d", "o", "m", ".", EOS))
+
     def test_sentence_splitting_and_terminal_punctuation(self) -> None:
         self.assertEqual(
             split_sentences("В г. Москве ул. Ленина д. 5. Это второй дом! А т.е. третий?"),
             ["В г. Москве ул. Ленина д. 5.", "Это второй дом!", "А т.е. третий?"],
+        )
+        self.assertEqual(
+            split_sentences("А. С. Пушкин родился в 1799 г. Он писал стихи."),
+            ["А. С. Пушкин родился в 1799 г. Он писал стихи."],
+        )
+        self.assertEqual(
+            split_sentences("Он жил в X веке до н. э. Он использовался."),
+            ["Он жил в X веке до н. э.", "Он использовался."],
+        )
+        self.assertEqual(
+            split_sentences("Книги, т. е. Библия и Коран."),
+            ["Книги, т. е. Библия и Коран."],
+        )
+        self.assertEqual(
+            split_sentences("Он крикнул «Стой!» и побежал."),
+            ["Он крикнул «Стой!» и побежал."],
+        )
+        self.assertEqual(
+            split_sentences("Э. Хемингуэй писал романы. Они известны."),
+            ["Э. Хемингуэй писал романы.", "Они известны."],
         )
         self.assertEqual(ensure_terminal_punctuation("Привет"), "Привет.")
         self.assertEqual(ensure_terminal_punctuation("Привет!"), "Привет!")

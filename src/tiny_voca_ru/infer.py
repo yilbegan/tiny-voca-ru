@@ -20,6 +20,7 @@ from .frontend import (
     PhoneSequence,
     StressProvider,
     ensure_terminal_punctuation,
+    normalize,
     phonemize,
     split_clause,
     split_sentences,
@@ -130,7 +131,7 @@ class _BaseSynthesizer:
 
         def read(piece: str) -> None:
             try:
-                phones = phonemize(piece, stress=stress)
+                phones = phonemize(piece, stress=stress, normalize="none")
             except NothingToPronounce:
                 return
             if len(phones) <= limit:
@@ -158,8 +159,10 @@ class _BaseSynthesizer:
             for part in pieces:
                 read(part)
 
-        for sentence in split_sentences(ensure_terminal_punctuation(text)):
-            read(sentence)
+        for raw_sentence in split_sentences(ensure_terminal_punctuation(text)):
+            normalized = normalize(raw_sentence)
+            for sentence in split_sentences(normalized):
+                read(sentence)
         if not waves:
             raise NothingToPronounce("nothing in the text could be pronounced")
         audio = np.concatenate(waves).astype(np.float32, copy=False)

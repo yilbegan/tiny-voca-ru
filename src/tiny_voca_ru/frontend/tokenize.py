@@ -19,16 +19,20 @@ _TOKEN = re.compile(rf"[{_PUNCTUATION}]|[^\s{_PUNCTUATION}]+")
 
 # Sentence-splitting regexes kept in sync with web/public/worker.js.
 _SPACE = re.compile(r"[\s\ufeff]+")
-_SENTENCE_END = re.compile(r"""(?:(?<=[.!?…])|(?<=[.!?…]["')\]»“]))\s+(?=["'(\[«„]?[A-ZА-ЯЁ0-9])""")
+_SENTENCE_END = re.compile(
+    r"""(?:(?<=[.!?…])|(?<=[.!?…]["')\]»“]))\s+(?=["'(\[«„]?\+?[A-ZА-ЯЁ0-9])"""
+)
 _NOT_AN_END = re.compile(
-    r"(?:\b(?:тыс|млн|млрд|руб|коп|долл|ул|пр|просп|пер|наб|пл|обл|кв|корп|стр|рис|табл|см|ср|напр|"
-    r"проф|акад|доц|им|св|гр|тел|др|т\.е|т\.д|т\.п|т\.к|т\.н)|\b[A-ZА-ЯЁ])\.$",
-    re.IGNORECASE,
+    r"(?:(?i:\b(?:тыс|млн|млрд|руб|коп|долл|ул|пр|просп|пер|наб|пл|обл|кв|корп|стр|рис|табл|см|ср|"
+    r"напр|проф|акад|доц|им|св|гр|тел|др|т\.\s?е|т\.\s?д|т\.\s?п|т\.\s?к|т\.\s?н|"
+    r"г|д|п|т|ч|р|в|с|н))|\b[A-ZА-ЯЁ])\.$"
 )
 _CLAUSE_END = re.compile(r"(?<=[,;:—])\s+")
 _TEXT_END = re.compile(r"[\s\ufeff]+$")
 _CLOSING = "\"'”’)]»"
-
+_TERMINAL_PUNCT: frozenset[str] = frozenset((".", "!", "?"))
+_PAUSE_PUNCT: frozenset[str] = frozenset((",", ";", ":", "—"))
+_PAUSE_OR_TERMINAL: frozenset[str] = _PAUSE_PUNCT | _TERMINAL_PUNCT
 
 class NothingToPronounce(ValueError):
     """Raised when text contains no pronounceable words, numbers, or letters."""
@@ -129,18 +133,78 @@ def transcribe(
 
 def tokenize(phrase_pieces: Sequence[Piece]) -> PhoneSequence:
     """Convert ``pieces()`` output into a ``PhoneSequence`` with ``<bos>``/``<sp>``/``<eos>``."""
+    last_speech = -1
+    for index, (is_punct, value) in enumerate(phrase_pieces):
+        if not is_punct:
+            assert not isinstance(value, str)
+            if any(word for word in value):
+                last_speech = index
+
     symbols: list[str] = [BOS]
     stress_levels: list[int] = [0]
     unknown: list[str] = []
-    for is_punct, value in phrase_pieces:
+    seen_speech = False
+
+    def last_sig() -> str:
+        for sym in reversed(symbols):
+            if sym != '"':
+                return sym
+        return BOS
+
+    def pop_trailing_pauses(only_comma: bool = False) -> None:
+        target = (",",) if only_comma else _PAUSE_PUNCT
+        while len(symbols) > 1 and symbols[-1] in target:
+            symbols.pop()
+            stress_levels.pop()
+
+    for index, (is_punct, value) in enumerate(phrase_pieces):
         if is_punct:
             assert isinstance(value, str)
-            if symbols[-1] != value:  # collapse repeated punctuation like "!!"
-                symbols.append(value)
+            speech_follows = index < last_speech
+            if value == "'":
+                continue
+            if value in ("(", ")", "—"):
+                if not (seen_speech and speech_follows) or last_sig() in _PAUSE_OR_TERMINAL:
+                    continue
+                token = ","
+            elif value == "…":
+                if speech_follows:
+                    if not seen_speech or last_sig() in _PAUSE_OR_TERMINAL:
+                        continue
+                    token = ","
+                else:
+                    later_terminal = any(
+                        p and v in ("!", "?") for p, v in phrase_pieces[index + 1 :]
+                    )
+                    if later_terminal:
+                        continue
+                    token = "."
+            elif value in _TERMINAL_PUNCT and speech_follows:
+                if not seen_speech or last_sig() in _PAUSE_OR_TERMINAL:
+                    continue
+                token = ","
+            else:
+                token = value
+
+            if token in _PAUSE_PUNCT:
+                if not seen_speech:
+                    continue
+                if token in (";", ":") and symbols[-1] == ",":
+                    pop_trailing_pauses(only_comma=True)
+                if last_sig() in _PAUSE_OR_TERMINAL:
+                    continue
+            elif token in _TERMINAL_PUNCT:
+                pop_trailing_pauses(only_comma=False)
+                if last_sig() in _TERMINAL_PUNCT:
+                    continue
+            if symbols[-1] != token:  # collapse repeated punctuation like "!!"
+                symbols.append(token)
                 stress_levels.append(0)
             continue
         assert not isinstance(value, str)
         for word in value:
+            if not word:
+                continue
             if symbols[-1] in PHONE_SET or symbols[-1] == UNK:
                 symbols.append(SP)
                 stress_levels.append(0)
@@ -150,6 +214,7 @@ def tokenize(phrase_pieces: Sequence[Piece]) -> PhoneSequence:
                     phone = UNK
                 symbols.append(phone)
                 stress_levels.append(level)
+                seen_speech = True
     symbols.append(EOS)
     stress_levels.append(0)
     if not any(s in PHONE_SET or s == UNK for s in symbols):
@@ -189,7 +254,7 @@ def split_sentences(text: str) -> list[str]:
     current = ""
     for piece in _SENTENCE_END.split(_SPACE.sub(" ", text).strip()):
         current = f"{current} {piece}" if current else piece
-        if not _NOT_AN_END.search(current):
+        if not _NOT_AN_END.search(current.replace("+", "")):
             parts.append(current)
             current = ""
     if current:

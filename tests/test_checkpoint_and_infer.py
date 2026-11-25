@@ -363,3 +363,51 @@ class CheckpointAndInferTests(unittest.TestCase):
                 s_sub_onnx = OnnxSynthesizer.from_pretrained("org/sub-model", subfolder="v2")
                 self.assertEqual(calls[-1]["allow_patterns"], ["v2/model.onnx", "v2/model.json"])
                 self.assertGreater(s_sub_onnx.synthesize("Привет!", voice="M").audio.size, 0)
+
+    def test_post_normalization_sentence_boundary_guard(self) -> None:
+        model = small_model()
+        with tempfile.TemporaryDirectory() as tmp:
+            ckpt_dir = save_checkpoint(Path(tmp) / "ckpt", model, step=5)
+            synth = Synthesizer(ckpt_dir)
+
+            # Sentence-final abbreviations that expand with a period must split cleanly
+            # without leaking a mid-utterance period into a single utterance.
+            split_cases = [
+                "Книги, журналы и т.д. Следующее предложение.",
+                "Билет стоит 5 тыс. руб. Это недорого.",
+                "Он жил в 1999 г. Потом уехал.",
+                "В XIX в. Люди жили иначе.",
+                "Книги и т.д. Подробности на рис. 3.",
+            ]
+            for text in split_cases:
+                res = synth.synthesize(text, voice="F")
+                self.assertEqual(len(res.utterances), 2, text)
+                for utt in res.utterances:
+                    interior = utt.symbols[1:-2]
+                    self.assertNotIn(".", interior, f"mid-utterance period in {text!r}: {utt}")
+                    self.assertIn(utt.symbols[-2], (".", "!", "?", "…"), text)
+
+            # Initials stay inside their sentence while sentence-final year abbreviation splits.
+            pushkin = synth.synthesize(
+                "А. С. Пушкин родился в 1799 г. Он писал стихи.", voice="F"
+            )
+            self.assertEqual(len(pushkin.utterances), 2)
+
+            # Unexpanded abbreviations before lowercase and inline quotes stay in one utterance.
+            for single_text in (
+                "Цена 100 руб. и 50 коп.",
+                "Он стал гл. редактором.",
+                "На ст. метро Арбатская было тихо.",
+                "Он крикнул «Стой!» и побежал.",
+                "Он подумал… и ушёл.",
+            ):
+                single = synth.synthesize(single_text, voice="F")
+                self.assertEqual(len(single.utterances), 1, single_text)
+                self.assertNotIn(".", single.utterances[0].symbols[1:-2], single_text)
+            # No double-normalization: normalize() is called once per raw sentence.
+            with patch("tiny_voca_ru.infer.normalize", wraps=__import__(
+                "tiny_voca_ru.frontend", fromlist=["normalize"]
+            ).normalize) as spy:
+                res = synth.synthesize("Цена 100 руб. Второе предложение.", voice="F")
+                self.assertEqual(len(res.utterances), 2)
+                self.assertEqual(spy.call_count, 1)

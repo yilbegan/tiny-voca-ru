@@ -106,9 +106,9 @@ class Segment:
     full: bool = False  # retains quality when unstressed
     last: bool = False  # final vowel of its written word
     initial: bool = False  # first segment of its written word
+    final_letter: bool = False  # final segment of its written word
     loan: bool = False  # word contains hard е (respelled э after consonant)
     unit: int = 0
-
 
 def respell(word: str) -> str:
     """Apply lexicon and cluster respellings, preserving stress by vowel index."""
@@ -195,6 +195,7 @@ def spell(word: str) -> list[Segment]:
         vowels[-1].last = True
     if out:
         out[0].initial = True
+        out[-1].final_letter = True
     return out
 
 
@@ -307,23 +308,39 @@ def voicing(segments: list[Segment]) -> None:
 
 
 def merge(segments: list[Segment]) -> list[Segment]:
-    """Collapse geminates and assimilated sibilant/affricate clusters into single tokens."""
+    """Collapse geminates and assimilated sibilant/affricate clusters within a word.
+
+    Across word/clitic boundaries (different ``unit``), preserve consonant length so
+    single-consonant prepositions (``в футболке``, ``к которой``, ``с собой``) are not deleted,
+    while still applying place assimilation on sibilant pairs (``с шумом`` -> ``ʂ ʂ``).
+    """
     out: list[Segment] = []
     for segment in segments:
         previous = out[-1].phone if out else None
         phone = segment.phone
         if previous is None or previous in VOWEL_SET or phone in VOWEL_SET:
             out.append(segment)
-        elif phone == previous:
-            continue
-        elif (
-            (previous in ("s", "sʲ", "ʂ") and phone in ("tɕ", "ɕ"))
-            or (previous in ("s", "sʲ") and phone == "ʂ")
-            or (previous in ("z", "zʲ") and phone == "ʐ")
-            or (previous in ("t", "tʲ", "d", "dʲ") and phone in ("ts", "tɕ"))
-        ):
-            out[-1].phone = "ɕ" if phone == "tɕ" and previous in ("s", "sʲ", "ʂ") else phone
+        elif out[-1].unit == segment.unit:
+            if phone == previous:
+                continue
+            if (
+                (previous in ("s", "sʲ", "ʂ") and phone in ("tɕ", "ɕ"))
+                or (previous in ("s", "sʲ") and phone == "ʂ")
+                or (previous in ("z", "zʲ") and phone == "ʐ")
+                or (previous in ("t", "tʲ", "d", "dʲ") and phone in ("ts", "tɕ"))
+            ):
+                out[-1].phone = "ɕ" if phone == "tɕ" and previous in ("s", "sʲ", "ʂ") else phone
+            else:
+                out.append(segment)
         else:
+            if (
+                (previous in ("s", "sʲ") and phone == "ʂ")
+                or (previous in ("z", "zʲ") and phone == "ʐ")
+                or (previous in ("s", "sʲ", "ʂ") and phone == "ɕ")
+            ):
+                out[-1].phone = phone
+            elif previous in ("s", "sʲ", "ʂ") and phone == "tɕ":
+                out[-1].phone = "ɕ"
             out.append(segment)
     return out
 
@@ -345,13 +362,31 @@ def reduce(segments: list[Segment]) -> None:
         else:
             position = "pre"
         following = segments[i + 1].phone if i + 1 < len(segments) else ""
-        segment.phone = _reduced(segment, position, following in SOFT_PHONES)
+        before_final_je = (
+            i + 2 < len(segments)
+            and segments[i + 1].phone == "j"
+            and segments[i + 2].final_letter
+            and segments[i + 2].letter == "е"
+            and segments[i + 2].unit == segment.unit
+        )
+        segment.phone = _reduced(segment, position, following in SOFT_PHONES, before_final_je)
 
 
-def _reduced(segment: Segment, position: str, before_soft: bool) -> str:
+def _reduced(
+    segment: Segment, position: str, before_soft: bool, before_final_je: bool = False
+) -> str:
     quality, context = segment.phone, segment.context
     if quality in ("u", "i", "ɨ"):
         return quality
+    if (
+        quality == "e"
+        and position == "post"
+        and (
+            (segment.final_letter and context == "hush")
+            or (before_final_je and context in ("soft", "hush"))
+        )
+    ):
+        return "ə"
     if context == "soft":
         # ə in final syllable (тётя, вишням), i before soft consonant (память)
         return (
@@ -359,12 +394,11 @@ def _reduced(segment: Segment, position: str, before_soft: bool) -> str:
             if quality == "a" and position == "post" and segment.last and not before_soft
             else "i"
         )
-    if quality == "e":  # hard е in loanwords stays e (интернет)
-        return {"": "i", "hard": "e"}.get(context, "ɨ")
+    if quality == "e":  # initial э- and hard е in loanwords stay e (эпизод, интернет)
+        return {"": "e", "hard": "e"}.get(context, "ɨ")
     if position == "pre1" or (position == "pre" and context == ""):
         return "ɐ"
     return "ə"
-
 
 def phrase_phones(words: Sequence[str]) -> list[list[tuple[str, int]]]:
     """Convert stressed words of one phrase into phonetic words ``[(phone, stress)]``."""

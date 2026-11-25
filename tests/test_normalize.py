@@ -306,6 +306,21 @@ CASES_: list[tuple[str, str]] = [
     ("с 21 студентом", "с двадцатью одним студентом"),
     ("перед 31 машиной", "перед тридцатью одной машиной"),
     ("10^6", "десять в степени шесть"),
+    ("UTC+1", "ю ти си плюс один"),
+    ("A+8", "эй плюс восемь"),
+    ("60 миль/ч", "шестьдесят миль в час"),
+    ("1 миль/ч", "одна миля в час"),
+    ("2 миль/ч", "две мили в час"),
+    ("г-н Смирнов", "господин Смирнов"),
+    ("г-на Смирнова", "господина Смирнова"),
+    ("г-ну Смирнову", "господину Смирнову"),
+    ("г-ном Смирновым", "господином Смирновым"),
+    ("о г-не Смирнове", "о господине Смирнове"),
+    ("г-жа Иванова", "госпожа Иванова"),
+    ("г-жи Ивановой", "госпожи Ивановой"),
+    ("г-же Ивановой", "госпоже Ивановой"),
+    ("г-жу Иванову", "госпожу Иванову"),
+    ("г-жой Ивановой", "госпожой Ивановой"),
 ]
 
 
@@ -364,11 +379,58 @@ class NormalizeTests(unittest.TestCase):
             for text in (f"Цена 5 {unit}.", f"{unit}12,50"):
                 self.assertRegex(normalize(text), allowed)
 
+    def test_homoglyphs_only_in_mixed_words(self) -> None:
+        # Mixed Cyrillic+Latin with only visual homoglyphs -> fixed to Cyrillic.
+        self.assertEqual(normalize("мoлoкo"), "молоко")
+        self.assertEqual(normalize("мoлoк+o"), "молок+о")
+        self.assertEqual(normalize("Cлово"), "Слово")
+        # Standalone Latin letters/words and acronym-prefixed/non-homoglyph tokens stay untouched.
+        self.assertEqual(normalize("витамин B"), "витамин би")
+        self.assertEqual(normalize("язык C"), "язык си")
+        self.assertEqual(normalize("B ночь"), "би ночь")
+        self.assertEqual(normalize("ITшник"), "шник")
+        self.assertEqual(normalize("PCшник"), "шник")
+        self.assertEqual(normalize("C++11"), "си плюс плюс одиннадцать")
+        self.assertEqual(normalize("г-н. Иванов"), "господин Иванов")
+
+    def test_english_transliteration_rules(self) -> None:
+        for written, expected in (
+            ("coffee", "кофи"),
+            ("letter", "летер"),
+            ("station", "стейшн"),
+            ("creation", "криейшн"),
+            ("mission", "мишн"),
+            ("vision", "вижн"),
+            ("future", "фючер"),
+            ("picture", "пикчер"),
+            ("music", "мюсик"),
+            ("night", "найт"),
+            ("weight", "вейт"),
+            ("bridge", "бридж"),
+            ("edge", "эдж"),
+            ("budget", "буджет"),
+            ("widget", "виджет"),
+            ("knowledge", "ноуледж"),
+            ("new", "ню"),
+            ("know", "ноу"),
+            ("wrong", "ронг"),
+            ("service", "сервис"),
+            ("unit", "юнит"),
+            ("compute", "компют"),
+            ("tube", "тюб"),
+            ("cube", "кюб"),
+            ("cafe", "кафе"),
+            ("https", "хттпс"),
+            ("ssh", "сш"),
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(normalize(written), expected)
     def test_idempotent(self) -> None:
         extra = [
             "Встреча 17.11.2026 в 14:30 в г. Москве, ул. Ленина, д. 5; "
             "вход 1525 руб. (т.е. дёшево).",
             "В 1990-х гг. ВВП США вырос на 3,5%, а iPhone стоил $599.",
+            "Г-н Смирнов ехал 60 миль/ч в зоне UTC+1, пил coffee и купил мoлoкo.",
         ]
         for text in [written for written, _ in CASES_] + extra:
             once = normalize(text)

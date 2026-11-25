@@ -188,7 +188,7 @@ REDUCTION: dict[str, str] = {
     "остан+овка": "ɐ s t ɐ n ˈo f k ə",
     "н+овая": "n ˈo v ə j ə",
     "ст+арый": "s t ˈa r ɨ j",
-    "эпиз+од": "i pʲ i z ˈo t",
+    "эпиз+од": "e pʲ i z ˈo t",
     "жен+а": "ʐ ɨ n ˈa",
     "цен+а": "ts ɨ n ˈa",
     "шест+ой": "ʂ ɨ s t ˈo j",
@@ -307,7 +307,7 @@ CLITICS: dict[str, str] = {
     "в шк+олу": "f ʂ k ˈo l u",
     "с др+угом": "z d r ˈu ɡ ə m",
     "к д+ому": "ɡ d ˈo m u",
-    "из с+ада": "i s ˈa d ə",
+    "из с+ада": "i s s ˈa d ə",
     "в сад+у": "f s ɐ d ˈu",
     "под стол+ом": "p ə t s t ɐ l ˈo m",
     "от бр+ата": "ɐ d b r ˈa t ə",
@@ -323,7 +323,7 @@ CLITICS: dict[str, str] = {
     "н+а дом": "n ˈa d ə m",
     "з+а город": "z ˈa ɡ ə r ə t",
     "п+о полю": "p ˈo p ə lʲ u",
-    "из-за двер+и": "i z ə d vʲ i rʲ ˈi",
+    "из-за двер+и": "i z z ə d vʲ i rʲ ˈi",
     "по-р+усски": "p ɐ r ˈu s kʲ i",
     "кт+о-то": "k t ˈo t ə",
     "чт+о-то": "ʂ t ˈo t ə",
@@ -331,10 +331,10 @@ CLITICS: dict[str, str] = {
     "гд+е-нибудь": "ɡ dʲ ˈe nʲ i b u tʲ",
     "скаж+и-ка": "s k ɐ ʐ ˈɨ k ə",
     "м+ог бы": "m ˈo ɡ b ɨ",
-    "+он же": "ˈo n ʐ ɨ",
+    "+он же": "ˈo n ʐ ə",
     "зн+аешь ли": "z n ˈa j i ʂ lʲ i",
     "т+ы ли": "t ˈɨ lʲ i",
-    "др+уг же": "d r ˈu ɡ ʐ ɨ",
+    "др+уг же": "d r ˈu ɡ ʐ ə",
     "и т+ы": "i t ˈɨ",
     "а +он": "ɐ ˈo n",
     "в +этом": "v ˈe t ə m",
@@ -343,11 +343,15 @@ CLITICS: dict[str, str] = {
     "к в+ам": "k v ˈa m",
     "в дв+ух": "v d v ˈu x",
     "с в+ами": "s v ˈa mʲ i",
-    "в ф+ильмах": "fʲ ˈi lʲ m ə x",
-    "в в+оду": "v ˈo d u",
-    "с сестр+ой": "sʲ i s t r ˈo j",
-    "без с+ил": "bʲ i sʲ ˈi l",
-    "с соб+ой": "s ɐ b ˈo j",
+    "в ф+ильмах": "fʲ fʲ ˈi lʲ m ə x",
+    "в в+оду": "v v ˈo d u",
+    "с сестр+ой": "sʲ sʲ i s t r ˈo j",
+    "без с+ил": "bʲ i sʲ sʲ ˈi l",
+    "с соб+ой": "s s ɐ b ˈo j",
+    "в футб+олке": "f f u d b ˈo l kʲ i",
+    "к кот+орой": "k k ɐ t ˈo r ə j",
+    "без сп+утников": "bʲ i s s p ˈu t nʲ i k ə f",
+    "с зап+олненными": "z z ɐ p ˈo l nʲ i n ɨ mʲ i",
     "до свид+ания": "d ə s vʲ i d ˈa nʲ i j ə",
     "по дор+огам": "p ə d ɐ r ˈo ɡ ə m",
     "но д+ом": "n o d ˈo m",
@@ -409,12 +413,12 @@ CLUSTERS: dict[str, str] = {
     "приезж+ать": "p rʲ i j i ʐ ˈa tʲ",
     "разж+ать": "r ɐ ʐ ˈa tʲ",
     "сж+ать": "ʐ ˈa tʲ",
-    "без ш+ума": "bʲ i ʂ ˈu m ə",
-    "с ш+умом": "ʂ ˈu m ə m",
-    "с ж+аром": "ʐ ˈa r ə m",
-    "с ч+ем": "ɕ ˈe m",
-    "из ч+ашки": "i ɕ ˈa ʂ kʲ i",
-    "от ц+ели": "ɐ ts ˈe lʲ i",
+    "без ш+ума": "bʲ i ʂ ʂ ˈu m ə",
+    "с ш+умом": "ʂ ʂ ˈu m ə m",
+    "с ж+аром": "ʐ ʐ ˈa r ə m",
+    "с ч+ем": "ɕ tɕ ˈe m",
+    "из ч+ашки": "i ɕ tɕ ˈa ʂ kʲ i",
+    "от ц+ели": "ɐ t ts ˈe lʲ i",
     "легк+о": "lʲ i x k ˈo",
     "м+ягкий": "mʲ ˈa x kʲ i j",
     "лёгкий": "lʲ ˈo x kʲ i j",
@@ -536,6 +540,24 @@ class GoldStandardTests(unittest.TestCase):
     def test_lexicon(self) -> None:
         self.check(LEXICON)
 
+    def test_post_tonic_final_e_minimal_pairs(self) -> None:
+        self.assertEqual(phones("в+аше"), "v ˈa ʂ ə")
+        self.assertEqual(phones("в+аши"), "v ˈa ʂ ɨ")
+        self.assertNotEqual(phones("в+аше"), phones("в+аши"))
+        self.assertNotEqual(phones("сл+едующее"), phones("сл+едующие"))
+        self.assertNotEqual(phones("стол+етнее"), phones("стол+етние"))
+        self.assertNotEqual(phones("серьёзнейшее"), phones("серьёзнейшие"))
+        self.assertNotEqual(phones("ц+енные"), phones("ц+енное"))
+        self.assertNotEqual(phones("нал+ичие"), phones("нал+ичия"))
+        self.assertEqual(phones("б+ольше"), "b ˈo lʲ ʂ ə")
+        self.assertEqual(phones("с+олнце"), "s ˈo n ts ə")
+        self.assertEqual(phones("м+оре"), "m ˈo rʲ i")
+        self.assertEqual(phones("в д+оме"), "v d ˈo mʲ i")
+        self.assertEqual(phones("нал+ичие"), "n ɐ lʲ ˈi tɕ i j i")
+        self.assertEqual(phones("ц+енные"), "ts ˈe n ɨ j i")
+        self.assertEqual(phones("в+ынес"), "v ˈɨ nʲ i s")
+        self.assertEqual(phones("н+ижнем"), "nʲ ˈi ʐ nʲ i m")
+
     def test_table_is_large(self) -> None:
         self.assertGreater(len(GOLD), 350)
 
@@ -638,7 +660,7 @@ class PiecesTests(unittest.TestCase):
             ("дав+ай-ка", "d ɐ v ˈa j k ə"),
             ("всё-таки", "f sʲ ˈo t ə kʲ i"),
             ("кое-кт+о", "k ə j i k t ˈo"),
-            ("из-за дв+ери", "i z ɐ d vʲ ˈe rʲ i"),
+            ("из-за дв+ери", "i z z ɐ d vʲ ˈe rʲ i"),
             ("по-р+усски", "p ɐ r ˈu s kʲ i"),
         ):
             with self.subTest(word=word):
