@@ -37,32 +37,36 @@ class ExportTests(unittest.TestCase):
     def test_rewrite_matches_synthesize(self) -> None:
         model = small_model()
         tokens, stress = utterance()
-        for voice in (0, 1):
-            reference, lengths, details = model.synthesize(
-                tokens,
-                stress,
-                torch.tensor([tokens.shape[1]]),
-                torch.tensor([voice]),
-                speed=1.25,
-                pitch_shift=0.1,
-                pitch_range=1.3,
-            )
-            noise = torch.randn(int(lengths[0]), generator=torch.Generator().manual_seed(0))[None]
-            with torch.no_grad():
-                audio, durations = Exportable(model, external_noise=True)(
+        for enhance in (True, False):
+            for voice in (0, 1):
+                reference, lengths, details = model.synthesize(
                     tokens,
                     stress,
+                    torch.tensor([tokens.shape[1]]),
                     torch.tensor([voice]),
-                    torch.tensor([1.25]),
-                    torch.tensor([0.1]),
-                    torch.tensor([1.3]),
-                    noise,
+                    speed=1.25,
+                    pitch_shift=0.1,
+                    pitch_range=1.3,
+                    enhance=enhance,
                 )
-            self.assertTrue(torch.equal(durations, details["durations"]))
-            self.assertEqual(audio.shape, reference.shape)
-            self.assertLess(
-                float((audio - reference).abs().max()), 1e-2 * float(reference.abs().max())
-            )
+                noise = torch.randn(int(lengths[0]), generator=torch.Generator().manual_seed(0))[
+                    None
+                ]
+                with torch.no_grad():
+                    audio, durations = Exportable(model, external_noise=True, enhance=enhance)(
+                        tokens,
+                        stress,
+                        torch.tensor([voice]),
+                        torch.tensor([1.25]),
+                        torch.tensor([0.1]),
+                        torch.tensor([1.3]),
+                        noise,
+                    )
+                self.assertTrue(torch.equal(durations, details["durations"]))
+                self.assertEqual(audio.shape, reference.shape)
+                self.assertLess(
+                    float((audio - reference).abs().max()), 1e-2 * float(reference.abs().max())
+                )
 
     def test_onnx_runs_at_multiple_lengths_and_writes_clean_metadata(self) -> None:
         import onnxruntime as ort

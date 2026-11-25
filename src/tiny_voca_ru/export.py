@@ -14,7 +14,13 @@ from torch.nn import functional as F
 
 from .checkpoint import CheckpointMeta, load_checkpoint
 from .frontend.symbols import SYMBOLS
-from .model import TinyVoca
+from .model import (
+    _HF_NOISE_AM_DEPTH,
+    _PITCH_SPIKE_MAX_DEV,
+    _SIBILANT_DB_FLOOR,
+    _SIBILANT_DB_SPAN,
+    TinyVoca,
+)
 
 INPUTS: tuple[str, ...] = ("tokens", "stress", "voice", "speed", "pitch_shift", "pitch_range")
 OUTPUTS: tuple[str, ...] = ("audio", "durations")
@@ -61,10 +67,11 @@ class Exportable(nn.Module):
     noise_envelope: Tensor
     ramp: Tensor
 
-    def __init__(self, model: TinyVoca, external_noise: bool = False) -> None:
+    def __init__(self, model: TinyVoca, external_noise: bool = False, enhance: bool = True) -> None:
         super().__init__()
         self.model = model
         self.external_noise = external_noise
+        self.enhance = enhance
         c = model.config
         v = model.vocoder
         causal = list(range(c.cep_causal))
@@ -108,14 +115,47 @@ class Exportable(nn.Module):
         )
         return (wave / envelope)[:, 0, fft // 2 : fft // 2 + samples]
 
+    def _filter_mixed(
+        self,
+        source_a: Tensor,
+        weight_a: Tensor,
+        source_b: Tensor,
+        weight_b: Tensor,
+        real: Tensor,
+        imaginary: Tensor,
+        name: str,
+        fft: int,
+        hop: int,
+    ) -> Tensor:
+        samples = source_a.shape[1]
+        padded = F.pad(torch.cat((source_a, source_b), dim=0)[:, None], (fft // 2, fft))
+        s_real = F.conv1d(padded, getattr(self, f"{name}_analysis_real"), stride=hop)
+        s_imaginary = F.conv1d(padded, getattr(self, f"{name}_analysis_imaginary"), stride=hop)
+        wa, wb = weight_a.transpose(1, 2), weight_b.transpose(1, 2)
+        mix_real = s_real[:1] * wa + s_real[1:] * wb
+        mix_imaginary = s_imaginary[:1] * wa + s_imaginary[1:] * wb
+        real, imaginary = real.transpose(1, 2), imaginary.transpose(1, 2)
+        product = torch.cat(
+            (
+                mix_real * real - mix_imaginary * imaginary,
+                mix_real * imaginary + mix_imaginary * real,
+            ),
+            dim=1,
+        )
+        wave = F.conv_transpose1d(product, getattr(self, f"{name}_synthesis"), stride=hop)
+        envelope = F.conv_transpose1d(
+            torch.ones_like(mix_real[:, :1]), getattr(self, f"{name}_envelope"), stride=hop
+        )
+        return (wave / envelope)[:, 0, fft // 2 : fft // 2 + samples]
+
     @staticmethod
     def _response(cepstrum: Tensor, real: Tensor, imaginary: Tensor) -> tuple[Tensor, Tensor]:
         magnitude = torch.exp((cepstrum @ real).clamp(-14, 6))
         angle = cepstrum @ imaginary
         return magnitude * torch.cos(angle), magnitude * torch.sin(angle)
 
-    def _pulses(self, f0: Tensor) -> Tensor:
-        """Float32 pulse train using 24-bit integer phase accumulation across frames."""
+    def _pulses_and_phase(self, f0: Tensor) -> tuple[Tensor, Tensor]:
+        """Float32 pulse train and wrapped phase using 24-bit integer phase accumulation."""
         c = self.model.config
         knots = torch.log(f0.clamp_min(1.0))
         knots = torch.cat((knots, knots[:, -1:]), dim=1)
@@ -138,9 +178,16 @@ class Exportable(nn.Module):
         safe_denom = torch.where(tiny, torch.ones_like(denominator), denominator)
         core = torch.where(tiny, whole, torch.sin((whole + 0.5) * theta) / safe_denom - 0.5)
         wave = core + (harmonics - whole) * torch.cos((whole + 1) * theta)
-        return wave * torch.sqrt(2.0 / harmonics)
+        return wave * torch.sqrt(2.0 / harmonics), theta
 
-    def _vocoder(self, hidden: Tensor, f0: Tensor, total: Tensor, noise: Tensor | None) -> Tensor:
+    def _vocoder(
+        self,
+        hidden: Tensor,
+        f0: Tensor,
+        total: Tensor,
+        noise: Tensor | None,
+        voicing: Tensor | None = None,
+    ) -> Tensor:
         c = self.model.config
         v = self.model.vocoder
         last = total - 1
@@ -167,6 +214,11 @@ class Exportable(nn.Module):
 
         # Noise branch
         n = v.noise(hidden)
+        noise_gains = n[..., c.noise_cep :]
+        v_prob: Tensor | None = None
+        if voicing is not None:
+            v_prob = torch.sigmoid(voicing)
+            noise_gains = v._clean_noise_gains(noise_gains, v_prob)
         steps = v.noise_steps
         sub = torch.minimum(
             torch.arange(cast(int, steps * total + 3), device=hidden.device),
@@ -176,20 +228,75 @@ class Exportable(nn.Module):
             n[..., : c.noise_cep].index_select(1, torch.div(sub, steps, rounding_mode="floor"))
             * v.noise_lifter
         )
-        gain = n[..., c.noise_cep :].flatten(1).index_select(1, sub)[..., None]
+        gain = noise_gains.flatten(1).index_select(1, sub)[..., None]
         shape = torch.cat((shape[..., :1] + gain, shape[..., 1:]), dim=-1)
         noise_real, noise_imaginary = self._response(shape, self.noise_real, self.noise_imaginary)
 
-        pulses = self._pulses(f0)
+        pulses, theta = self._pulses_and_phase(f0)
         if noise is None:
             noise = torch.randn_like(pulses)
         else:
             noise = noise.index_select(
                 1, torch.arange(cast(int, c.hop * total), device=hidden.device)
             )
-        return self._filter(
-            pulses, harmonic_real, harmonic_imaginary, "synth", c.synth_fft, c.synth_hop
-        ) + self._filter(noise, noise_real, noise_imaginary, "noise", c.noise_fft, c.noise_hop)
+
+        if v_prob is None:
+            harmonic_wave = self._filter(
+                pulses, harmonic_real, harmonic_imaginary, "synth", c.synth_fft, c.synth_hop
+            )
+        else:
+            mag2 = harmonic_real.square() + harmonic_imaginary.square()
+            e_lo = (mag2 * v.sibilant_lo_weights).sum(dim=-1, keepdim=True)
+            e_hi = (mag2 * v.sibilant_hi_weights).sum(dim=-1, keepdim=True)
+            ln10 = math.log(10.0)
+            ratio_db = (10.0 / ln10) * torch.log((e_hi + 1e-12) / (e_lo + 1e-12))
+            sibilance = ((ratio_db - _SIBILANT_DB_FLOOR) / _SIBILANT_DB_SPAN).clamp(0.0, 1.0)
+            v_sub = 0.5 * (
+                v_prob[..., None].index_select(1, here)
+                + v_prob[..., None].index_select(1, following)
+            )
+            alpha = (
+                1.0 - sibilance
+            ) * v.vowel_harmonic_curve + sibilance * v_sub * v.sibilant_harmonic_curve
+            h_weight = torch.sqrt(alpha.clamp(0.0, 1.0))
+            n_weight = torch.sqrt((1.0 - alpha).clamp(0.0, 1.0))
+
+            shift = v.noise_shift
+            shifted = torch.cat(
+                (noise.index_select(1, v.prefix_flip_index), noise[:, :-shift]), dim=1
+            )
+            if c.hop % 2 == 0:
+                sign = (torch.ones_like(f0)[..., None] * v.sample_alt_sign).reshape(1, -1)
+            else:
+                sign = (
+                    1.0
+                    - 2.0
+                    * torch.remainder(
+                        torch.arange(cast(int, c.hop * total), device=hidden.device), 2
+                    ).float()
+                )[None]
+            v_knots = torch.cat((v_prob, v_prob[:, -1:]), dim=1)
+            v_samples = (
+                v_knots[:, :-1, None] * (1.0 - self.ramp) + v_knots[:, 1:, None] * self.ramp
+            ).reshape(1, -1)
+            depth = _HF_NOISE_AM_DEPTH * v_samples
+            mod = (1.0 + depth * torch.cos(theta)) / torch.sqrt(1.0 + 0.5 * depth.square())
+            hf_noise = shifted * sign * mod
+            harmonic_wave = self._filter_mixed(
+                pulses,
+                h_weight,
+                hf_noise,
+                n_weight,
+                harmonic_real,
+                harmonic_imaginary,
+                "synth",
+                c.synth_fft,
+                c.synth_hop,
+            )
+
+        return harmonic_wave + self._filter(
+            noise, noise_real, noise_imaginary, "noise", c.noise_fft, c.noise_hop
+        )
 
     def forward(
         self,
@@ -244,8 +351,22 @@ class Exportable(nn.Module):
             (pitch.clamp(-2.0, 1.5), voiced, prosody[..., 2].clamp(-4.5, 3.0)), dim=-1
         )
         acoustic = m.acoustic_stack(prosody_hidden + m.prosody_projection(condition), frame_mask)
-        f0 = (c.pitch_reference_hz * torch.exp(pitch + pitch_shift)).clamp(c.f0_min, c.f0_max)
-        return self._vocoder(acoustic, f0, total, noise), durations
+        shifted_pitch = pitch + pitch_shift
+        if self.enhance:
+            frame_idx = torch.arange(cast(int, total), device=tokens.device)
+            prev_idx = (frame_idx - 1).clamp_min(0)
+            next_idx = torch.minimum(frame_idx + 1, total - 1)
+            prev = shifted_pitch.index_select(1, prev_idx)
+            nxt = shifted_pitch.index_select(1, next_idx)
+            lo = torch.minimum(torch.minimum(prev, shifted_pitch), nxt)
+            hi = torch.maximum(torch.maximum(prev, shifted_pitch), nxt)
+            med = prev + shifted_pitch + nxt - lo - hi
+            shifted_pitch = med + _PITCH_SPIKE_MAX_DEV * torch.tanh(
+                (shifted_pitch - med) / _PITCH_SPIKE_MAX_DEV
+            )
+        f0 = (c.pitch_reference_hz * torch.exp(shifted_pitch)).clamp(c.f0_min, c.f0_max)
+        voicing_arg = voicing if self.enhance else None
+        return self._vocoder(acoustic, f0, total, noise, voicing_arg), durations
 
 
 def example_inputs(length: int = 24) -> tuple[Tensor, ...]:
@@ -270,11 +391,12 @@ def export_model(
     *,
     external_noise: bool = False,
     opset: int = 17,
+    enhance: bool = True,
 ) -> Path:
     """Export an in-memory ``TinyVoca`` instance directly to an ``.onnx`` file."""
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    wrapper = Exportable(model, external_noise).eval()
+    wrapper = Exportable(model, external_noise, enhance=enhance).eval()
     inputs: tuple[Tensor, ...] = example_inputs()
     names = list(INPUTS)
     axes: dict[str, dict[int, str]] = {
@@ -327,13 +449,14 @@ def export_onnx(
     *,
     external_noise: bool = False,
     opset: int = 17,
+    enhance: bool = True,
 ) -> tuple[Path, Path]:
     """Export a safetensors checkpoint directory into ``output_dir/{model.onnx,model.json}``."""
     model, meta = load_checkpoint(checkpoint_dir, device="cpu")
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = export_model(
-        model, out_dir / "model.onnx", external_noise=external_noise, opset=opset
+        model, out_dir / "model.onnx", external_noise=external_noise, opset=opset, enhance=enhance
     )
     meta_path = out_dir / "model.json"
     meta_path.write_text(
@@ -362,10 +485,19 @@ def main() -> None:
     parser.add_argument(
         "--external-noise", action="store_true", help="Accept noise waveform as an ONNX input"
     )
+    parser.add_argument(
+        "--no-enhance",
+        action="store_true",
+        help="Disable Level-1 DSP post-vocoder enhancement (high-frequency crossover and de-buzz)",
+    )
     parser.add_argument("--opset", type=int, default=17)
     args = parser.parse_args()
     onnx_path, meta_path = export_onnx(
-        args.checkpoint, args.output, external_noise=args.external_noise, opset=args.opset
+        args.checkpoint,
+        args.output,
+        external_noise=args.external_noise,
+        opset=args.opset,
+        enhance=not args.no_enhance,
     )
     print(f"Exported {onnx_path} ({onnx_path.stat().st_size / 1e6:.2f} MB) and {meta_path.name}")
 

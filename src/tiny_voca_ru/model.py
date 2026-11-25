@@ -122,14 +122,14 @@ class Predictor(nn.Module):
         return self.out(x) * mask[..., None]
 
 
-def pulse_train(
+def _pulse_train_and_phase(
     f0: Tensor,
     sample_rate: int,
     hop: int,
     limit: float = 0.47,
     phase: Tensor | None = None,
-) -> Tensor:
-    """Band-limited pulse train ``[B, T * hop]`` with unit power for ``f0 [B, T]`` in Hz."""
+) -> tuple[Tensor, Tensor]:
+    """Return band-limited pulse train and wrapped glottal phase ``theta`` ``[B, T * hop]``."""
     frames = f0.shape[1]
     knots = torch.log(f0.double().clamp_min(1.0))
     knots = torch.cat((knots, knots[:, -1:]), dim=1)
@@ -148,7 +148,19 @@ def pulse_train(
     safe_denom = torch.where(tiny, torch.ones_like(denominator), denominator)
     core = torch.where(tiny, whole, torch.sin((whole + 0.5) * theta) / safe_denom - 0.5)
     wave = core + (harmonics - whole) * torch.cos((whole + 1) * theta)
-    return (wave * torch.sqrt(2.0 / harmonics)).float()
+    return (wave * torch.sqrt(2.0 / harmonics)).float(), theta.float()
+
+
+def pulse_train(
+    f0: Tensor,
+    sample_rate: int,
+    hop: int,
+    limit: float = 0.47,
+    phase: Tensor | None = None,
+) -> Tensor:
+    """Band-limited pulse train ``[B, T * hop]`` with unit power for ``f0 [B, T]`` in Hz."""
+    wave, _ = _pulse_train_and_phase(f0, sample_rate, hop, limit, phase)
+    return wave
 
 
 def filtered(source: Tensor, response: Tensor, fft: int, hop: int, window: Tensor) -> Tensor:
@@ -178,6 +190,22 @@ def cepstrum_response(causal: Tensor, anticausal: Tensor | None, fft: int) -> Te
     return torch.polar(torch.exp(spectrum.real.clamp(-14, 6)), spectrum.imag)
 
 
+def _raised_cosine_lowpass(freqs: Tensor, start_hz: float, end_hz: float) -> Tensor:
+    """Return 1 below ``start_hz``, 0 above ``end_hz``, raised-cosine rolloff in between."""
+    t = ((freqs - start_hz) / max(end_hz - start_hz, 1.0)).clamp(0.0, 1.0)
+    return 0.5 * (1.0 + torch.cos(math.pi * t))
+
+
+_SIBILANT_LO_BAND_HZ = (80.0, 800.0)
+_SIBILANT_HI_BAND_HZ = (3500.0, 10500.0)
+_SIBILANT_DB_FLOOR = -28.0
+_SIBILANT_DB_SPAN = 10.0
+_VOWEL_CROSSOVER_HZ = (3500.0, 6500.0)
+_SIBILANT_CROSSOVER_HZ = (1600.0, 3200.0)
+_HF_NOISE_AM_DEPTH = 0.45
+_PITCH_SPIKE_MAX_DEV = 0.035  # ~0.6 semitones in log-F0
+
+
 class SourceFilter(nn.Module):
     """Harmonic-plus-noise source-filter vocoder driven by frame-level complex cepstra."""
 
@@ -186,12 +214,21 @@ class SourceFilter(nn.Module):
     noise_lifter: Tensor
     synth_window: Tensor
     noise_window: Tensor
+    sibilant_lo_weights: Tensor
+    sibilant_hi_weights: Tensor
+    vowel_harmonic_curve: Tensor
+    sibilant_harmonic_curve: Tensor
+    noise_alt_pattern: Tensor
+    sample_alt_sign: Tensor
+    prefix_flip_index: Tensor
+    frame_ramp: Tensor
 
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.config = config
         self.harmonic_steps = config.hop // config.synth_hop
         self.noise_steps = config.hop // config.noise_hop
+        self.noise_shift = min(193, config.hop - 1)
         self.harmonic = nn.Linear(
             config.channels, config.cep_causal + config.cep_anti + self.harmonic_steps
         )
@@ -213,6 +250,44 @@ class SourceFilter(nn.Module):
         self.register_buffer("synth_window", torch.hann_window(config.synth_fft), persistent=False)
         self.register_buffer("noise_window", torch.hann_window(config.noise_fft), persistent=False)
 
+        freqs = torch.fft.rfftfreq(config.synth_fft, d=1.0 / config.sample_rate)
+        lo_mask = ((freqs >= _SIBILANT_LO_BAND_HZ[0]) & (freqs < _SIBILANT_LO_BAND_HZ[1])).float()
+        hi_mask = ((freqs >= _SIBILANT_HI_BAND_HZ[0]) & (freqs < _SIBILANT_HI_BAND_HZ[1])).float()
+        self.register_buffer(
+            "sibilant_lo_weights", lo_mask / lo_mask.sum().clamp_min(1.0), persistent=False
+        )
+        self.register_buffer(
+            "sibilant_hi_weights", hi_mask / hi_mask.sum().clamp_min(1.0), persistent=False
+        )
+        self.register_buffer(
+            "vowel_harmonic_curve",
+            _raised_cosine_lowpass(freqs, *_VOWEL_CROSSOVER_HZ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "sibilant_harmonic_curve",
+            _raised_cosine_lowpass(freqs, *_SIBILANT_CROSSOVER_HZ),
+            persistent=False,
+        )
+        alt = torch.tensor(
+            [1.0 if i % 2 == 0 else -1.0 for i in range(self.noise_steps)], dtype=torch.float32
+        )
+        self.register_buffer("noise_alt_pattern", alt, persistent=False)
+        sign = torch.tensor(
+            [1.0 if i % 2 == 0 else -1.0 for i in range(config.hop)], dtype=torch.float32
+        )
+        self.register_buffer("sample_alt_sign", sign, persistent=False)
+        self.register_buffer(
+            "prefix_flip_index",
+            torch.arange(self.noise_shift - 1, -1, -1, dtype=torch.long),
+            persistent=False,
+        )
+        self.register_buffer(
+            "frame_ramp",
+            torch.arange(config.hop, dtype=torch.float32) / config.hop,
+            persistent=False,
+        )
+
     @staticmethod
     def _take(values: Tensor, index: Tensor) -> Tensor:
         return values.gather(1, index[..., None].expand(-1, -1, values.shape[-1]))
@@ -227,6 +302,53 @@ class SourceFilter(nn.Module):
             :, : source.shape[-1]
         ]
 
+    @staticmethod
+    def _shape_mixed(
+        source_a: Tensor,
+        weight_a: Tensor,
+        source_b: Tensor,
+        weight_b: Tensor,
+        response: Tensor,
+        fft: int,
+        hop: int,
+        window: Tensor,
+    ) -> Tensor:
+        padded = F.pad(torch.cat((source_a, source_b), dim=0), (0, fft // 2))
+        spectrum = torch.stft(
+            padded, fft, hop, window=window, center=True, pad_mode="constant", return_complex=True
+        )
+        spec_a, spec_b = spectrum.chunk(2, dim=0)
+        mixed = (
+            spec_a * weight_a.transpose(1, 2) + spec_b * weight_b.transpose(1, 2)
+        ) * response.transpose(1, 2)
+        return torch.istft(mixed, fft, hop, window=window, center=True, length=padded.shape[-1])[
+            :, : source_a.shape[-1]
+        ]
+
+    def _decorrelated_noise(self, noise: Tensor, frames: int) -> Tensor:
+        """Derive a second unit-power white noise stream uncorrelated with ``noise``."""
+        shift = self.noise_shift
+        if shift <= 0 or noise.shape[1] <= shift:
+            return -noise
+        shifted = torch.cat((noise.index_select(1, self.prefix_flip_index), noise[:, :-shift]), 1)
+        if self.config.hop % 2 == 0:
+            sign = self.sample_alt_sign.repeat(frames)[None]
+        else:
+            sign = (1.0 - 2.0 * (torch.arange(noise.shape[1], device=noise.device) % 2).float())[
+                None
+            ]
+        return shifted * sign
+
+    def _clean_noise_gains(self, gains: Tensor, voicing_prob: Tensor) -> Tensor:
+        """Project out the 187.5 Hz alternating subframe bias on voiced frames, preserving RMS."""
+        if self.noise_steps < 2 or self.noise_steps % 2 != 0:
+            return gains
+        alt = (gains * self.noise_alt_pattern).mean(dim=-1, keepdim=True) * voicing_prob[..., None]
+        cleaned = gains - alt * self.noise_alt_pattern
+        orig_power = torch.exp((2.0 * gains).clamp(-28.0, 12.0)).mean(dim=-1, keepdim=True)
+        clean_power = torch.exp((2.0 * cleaned).clamp(-28.0, 12.0)).mean(dim=-1, keepdim=True)
+        return cleaned + 0.5 * torch.log(orig_power / clean_power.clamp_min(1e-12))
+
     def forward(
         self,
         hidden: Tensor,
@@ -234,6 +356,7 @@ class SourceFilter(nn.Module):
         lengths: Tensor,
         noise: Tensor | None = None,
         phase: Tensor | None = None,
+        voicing: Tensor | None = None,
     ) -> Tensor:
         c = self.config
         frames = hidden.shape[1]
@@ -242,6 +365,7 @@ class SourceFilter(nn.Module):
             hidden = hidden.float()
             audible = length_mask(lengths * c.hop, samples)
             last = (lengths - 1).clamp_min(0)[:, None]
+            frame_index = torch.minimum(torch.arange(frames, device=f0.device)[None], last)
 
             # Harmonic branch: interpolated envelope with per-subframe log gain
             h = self.harmonic(hidden)
@@ -276,11 +400,16 @@ class SourceFilter(nn.Module):
 
             # Noise branch: one spectral envelope per frame, four sub-frame gains
             n = self.noise(hidden)
+            noise_gains = n[..., c.noise_cep :]
+            v_prob: Tensor | None = None
+            if voicing is not None:
+                v_prob = torch.sigmoid(voicing.float()).gather(1, frame_index)
+                noise_gains = self._clean_noise_gains(noise_gains, v_prob)
             sub = self._subframes(frames, lengths, self.noise_steps)
             shape = self._take(n[..., : c.noise_cep], sub // self.noise_steps) * self.noise_lifter
             shape = torch.cat(
                 (
-                    shape[..., :1] + n[..., c.noise_cep :].flatten(1).gather(1, sub)[..., None],
+                    shape[..., :1] + noise_gains.flatten(1).gather(1, sub)[..., None],
                     shape[..., 1:],
                 ),
                 dim=-1,
@@ -288,18 +417,59 @@ class SourceFilter(nn.Module):
             noise_response = cepstrum_response(shape, None, c.noise_fft)
 
             # Hold last real pitch through batch padding so padding cannot alter final frames
-            f0 = f0.float().gather(
-                1, torch.minimum(torch.arange(frames, device=f0.device)[None], last)
+            f0 = f0.float().gather(1, frame_index)
+            pulses, theta = _pulse_train_and_phase(
+                f0, c.sample_rate, c.hop, c.harmonic_limit, phase
             )
-            pulses = pulse_train(f0, c.sample_rate, c.hop, c.harmonic_limit, phase) * audible
+            pulses = pulses * audible
             if noise is None:
                 noise = torch.randn(hidden.shape[0], samples, device=hidden.device)
-            wave = self._shape(
-                pulses, harmonic_response, c.synth_fft, c.synth_hop, self.synth_window
-            ) + self._shape(
+
+            if v_prob is None:
+                harmonic_wave = self._shape(
+                    pulses, harmonic_response, c.synth_fft, c.synth_hop, self.synth_window
+                )
+            else:
+                # Adaptive harmonic-to-noise crossover: preserve vowels & plosives while turning
+                # high-frequency sibilant buzz (especially z/zʲ/ʐ) into F0-modulated noise.
+                mag2 = harmonic_response.real.square() + harmonic_response.imag.square()
+                e_lo = (mag2 * self.sibilant_lo_weights).sum(dim=-1, keepdim=True)
+                e_hi = (mag2 * self.sibilant_hi_weights).sum(dim=-1, keepdim=True)
+                ln10 = math.log(10.0)
+                ratio_db = (10.0 / ln10) * torch.log((e_hi + 1e-12) / (e_lo + 1e-12))
+                sibilance = ((ratio_db - _SIBILANT_DB_FLOOR) / _SIBILANT_DB_SPAN).clamp(0.0, 1.0)
+                v_sub = 0.5 * (
+                    self._take(v_prob[..., None], here) + self._take(v_prob[..., None], following)
+                )
+                alpha = (
+                    1.0 - sibilance
+                ) * self.vowel_harmonic_curve + sibilance * v_sub * self.sibilant_harmonic_curve
+                h_weight = torch.sqrt(alpha.clamp(0.0, 1.0))
+                n_weight = torch.sqrt((1.0 - alpha).clamp(0.0, 1.0))
+
+                v_knots = torch.cat((v_prob, v_prob[:, -1:]), dim=1)
+                v_samples = (
+                    v_knots[:, :-1, None] * (1.0 - self.frame_ramp)
+                    + v_knots[:, 1:, None] * self.frame_ramp
+                ).reshape(hidden.shape[0], samples)
+                depth = _HF_NOISE_AM_DEPTH * v_samples
+                mod = (1.0 + depth * torch.cos(theta)) / torch.sqrt(1.0 + 0.5 * depth.square())
+                hf_noise = self._decorrelated_noise(noise, frames) * mod * audible
+                harmonic_wave = self._shape_mixed(
+                    pulses,
+                    h_weight,
+                    hf_noise,
+                    n_weight,
+                    harmonic_response,
+                    c.synth_fft,
+                    c.synth_hop,
+                    self.synth_window,
+                )
+
+            noise_wave = self._shape(
                 noise * audible, noise_response, c.noise_fft, c.noise_hop, self.noise_window
             )
-            return wave * audible
+            return (harmonic_wave + noise_wave) * audible
 
 
 class TinyVoca(nn.Module):
@@ -452,6 +622,23 @@ class TinyVoca(nn.Module):
         slow = slow / slow.std().clamp_min(1e-6)
         return ((2 * slow + fast) / (5**0.5) * semitones * math.log(2) / 12).to(device)
 
+    @staticmethod
+    def smooth_pitch_spikes(
+        pitch: Tensor, lengths: Tensor, max_dev: float = _PITCH_SPIKE_MAX_DEV
+    ) -> Tensor:
+        """Softly damp single-frame log-F0 spikes without flattening natural pitch contours."""
+        frames = pitch.shape[1]
+        index = torch.arange(frames, device=pitch.device)[None].expand(len(lengths), -1)
+        last = (lengths - 1).clamp_min(0)[:, None]
+        prev_idx = (index - 1).clamp_min(0)
+        next_idx = torch.minimum(index + 1, last)
+        prev = pitch.gather(1, prev_idx)
+        nxt = pitch.gather(1, next_idx)
+        lo = torch.minimum(torch.minimum(prev, pitch), nxt)
+        hi = torch.maximum(torch.maximum(prev, pitch), nxt)
+        med = prev + pitch + nxt - lo - hi
+        return med + max_dev * torch.tanh((pitch - med) / max_dev)
+
     @torch.inference_mode()
     def synthesize(
         self,
@@ -465,6 +652,7 @@ class TinyVoca(nn.Module):
         pitch_range: float = 1.0,
         pitch_jitter: float = 0.0,
         voiced_vowels: bool = True,
+        enhance: bool = True,
     ) -> tuple[Tensor, Tensor, dict[str, Tensor]]:
         """Run free-running TTS synthesis returning ``(wave, sample_lengths, details)``."""
         if (
@@ -509,10 +697,16 @@ class TinyVoca(nn.Module):
             batch_first=True,
         )
         pitch = prosody[..., 0] + pitch_shift
+        if enhance:
+            pitch = self.smooth_pitch_spikes(pitch, frame_lengths)
         if pitch_jitter > 0:
             pitch = pitch + self.pitch_wobble(pitch.shape, pitch_jitter, seed, pitch.device)
         wave = self.vocoder(
-            acoustic, self.frequency(pitch), frame_lengths, noise=noise.to(hidden.device)
+            acoustic,
+            self.frequency(pitch),
+            frame_lengths,
+            noise=noise.to(hidden.device),
+            voicing=prosody[..., 1] if enhance else None,
         )
         return (
             wave,

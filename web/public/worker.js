@@ -26,7 +26,7 @@ function reportDownloads(label) {
 }
 
 // Bump when files under assets/ change so browsers refresh cached assets.
-const VERSION = "ru-3";
+const VERSION = "ru-5";
 
 async function download(url, label) {
   const key = `${url}?v=${VERSION}`;

@@ -292,7 +292,9 @@ class OnnxSynthesizer(_BaseSynthesizer):
 class TorchSynthesizer(_BaseSynthesizer):
     """PyTorch inference engine backed by a safetensors checkpoint or ``TinyVoca`` instance."""
 
-    def __init__(self, model_or_path: TinyVoca | str | Path, *, device: str = "cpu") -> None:
+    def __init__(
+        self, model_or_path: TinyVoca | str | Path, *, device: str = "cpu", enhance: bool = True
+    ) -> None:
         if isinstance(model_or_path, (str, Path)):
             from .checkpoint import load_checkpoint
 
@@ -300,6 +302,7 @@ class TorchSynthesizer(_BaseSynthesizer):
         else:
             model = model_or_path.to(device).eval()
         self.model = model
+        self.enhance = enhance
         self.sample_rate = model.config.sample_rate
         self.voices = model.config.speakers
         self.max_tokens = model.config.max_tokens
@@ -356,6 +359,7 @@ class TorchSynthesizer(_BaseSynthesizer):
             pitch_shift=pitch_shift,
             seed=seed,
             pitch_range=pitch_range,
+            enhance=self.enhance,
         )
         if not torch.isfinite(audio).all():
             raise RuntimeError("model produced non-finite audio")

@@ -184,3 +184,79 @@ class ModelTests(unittest.TestCase):
         prosody = torch.randn(1, 10, 3)
         mask = torch.ones(1, 10, dtype=torch.bool)
         self.assertIs(TinyVoca.widen_pitch(prosody, mask, 1.0), prosody)
+
+    def test_level1_enhancement_debuzzes_and_preserves_checkpoint_contract(self) -> None:
+        c = small_config()
+        vocoder = SourceFilter(c)
+        self.assertEqual(
+            set(vocoder.state_dict().keys()),
+            {"harmonic.weight", "harmonic.bias", "noise.weight", "noise.bias"},
+        )
+
+        # Alternating 187.5 Hz subframe gain bias is removed on voiced frames while preserving RMS,
+        # and voiceless plosive burst ramps stay untouched.
+        gains = torch.tensor([[[0.2, -1.6, 0.2, -1.6], [-3.0, -3.0, 1.0, 1.0]]])
+        voicing_prob = torch.tensor([[1.0, 0.0]])
+        cleaned = vocoder._clean_noise_gains(gains, voicing_prob)
+        voiced_alt = float((cleaned[0, 0] * vocoder.noise_alt_pattern).mean().abs())
+        self.assertLess(voiced_alt, 1e-5)
+        orig_pow = float(torch.exp(2.0 * gains[0, 0]).mean())
+        clean_pow = float(torch.exp(2.0 * cleaned[0, 0]).mean())
+        self.assertAlmostEqual(clean_pow, orig_pow, places=4)
+        self.assertTrue(torch.allclose(cleaned[0, 1], gains[0, 1], atol=1e-5))
+
+        # Pitch spike smoother damps isolated 1-frame spikes while preserving linear contours
+        # and ignoring padded frames past lengths.
+        ramp = torch.linspace(-0.2, 0.2, 10)[None]
+        lengths = torch.tensor([8])
+        self.assertTrue(
+            torch.allclose(
+                TinyVoca.smooth_pitch_spikes(ramp, lengths)[0, :8], ramp[0, :8], atol=1e-5
+            )
+        )
+        flat_spiked = torch.zeros(1, 10)
+        flat_spiked[0, 4] = 0.15
+        flat_spiked[0, 8:] = 5.0  # padded garbage must not leak into frame 7
+        smoothed = TinyVoca.smooth_pitch_spikes(flat_spiked, lengths)
+        self.assertLess(float(smoothed[0, 4].abs()), 0.04)
+        self.assertLess(float(smoothed[0, 7].abs()), 1e-5)
+
+        # On a voiced sibilant-like harmonic response (low voice bar + strong HF peak),
+        # Level-1 crossover cuts >3.5 kHz pitch-lag periodicity while keeping <1 kHz voiced.
+        torch.manual_seed(0)
+        frames = 20
+        hidden = torch.zeros(1, frames, c.channels)
+        # Build a cepstrum with strong 0-500 Hz and 5-8 kHz energy and a valley around 2 kHz.
+        freqs = torch.fft.rfftfreq(c.synth_fft, d=1.0 / c.sample_rate)
+        target_mag = torch.full_like(freqs, 0.01)
+        target_mag[freqs < 600.0] = 0.5
+        target_mag[(freqs >= 4500.0) & (freqs <= 9000.0)] = 0.3
+        full_cep = torch.fft.irfft(torch.log(target_mag), n=c.synth_fft)
+        vocoder.harmonic.bias.data[: c.cep_causal] = (
+            full_cep[: c.cep_causal] / vocoder.causal_lifter
+        )
+        vocoder.noise.bias.data[0] = -10.0  # isolate harmonic branch crossover behavior
+        f0 = torch.full((1, frames), 160.0)
+        noise = torch.randn(1, frames * c.hop)
+        with torch.no_grad():
+            raw = vocoder(hidden, f0, torch.tensor([frames]), noise=noise, voicing=None)[0]
+            enh = vocoder(
+                hidden,
+                f0,
+                torch.tensor([frames]),
+                noise=noise,
+                voicing=torch.full((1, frames), 6.0),
+            )[0]
+
+        def pitch_ac(wave: torch.Tensor, lo_hz: float, hi_hz: float) -> float:
+            spec = torch.fft.rfft(wave)
+            fr = torch.fft.rfftfreq(len(wave), d=1.0 / c.sample_rate)
+            spec[(fr < lo_hz) | (fr >= hi_hz)] = 0
+            band = torch.fft.irfft(spec, n=len(wave))[1024:-1024]
+            lag = round(c.sample_rate / 160.0)
+            a, b = band[:-lag], band[lag:]
+            return float((a * b).sum() / (a.norm() * b.norm()).clamp_min(1e-9))
+
+        self.assertGreater(pitch_ac(enh, 80.0, 1000.0), 0.90)
+        self.assertGreater(pitch_ac(raw, 4500.0, 9000.0), 0.90)
+        self.assertLess(pitch_ac(enh, 4500.0, 9000.0), 0.25)
